@@ -28,10 +28,10 @@ and cleaning them up when the PR closes.
 Create these secrets in the caller repo: GitHub → repo → **Settings → Secrets
 and variables → Actions → New repository secret**.
 
-| Repo secret name | Passed as | Value |
+| Repo secret name | Action input | Value |
 |---|---|---|
-| `CF_PAGES_PREVIEW_API_TOKEN` | `api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}` | Cloudflare API token with `Account → Cloudflare Pages → Edit` permission, scoped to the single account that owns your Pages project |
-| `CF_PAGES_PREVIEW_ACCOUNT_ID` | `account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}` | Cloudflare account ID (hex string from the dashboard sidebar) |
+| `CF_PAGES_PREVIEW_API_TOKEN` | `api-token` | Cloudflare API token with `Account → Cloudflare Pages → Edit` permission, scoped to the single account that owns your Pages project |
+| `CF_PAGES_PREVIEW_ACCOUNT_ID` | `account-id` | Cloudflare account ID (hex string from the dashboard sidebar) |
 
 Both `deploy` and `cleanup` need the same two secrets.
 

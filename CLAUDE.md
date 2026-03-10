@@ -121,9 +121,9 @@ Each action (or group) must have a `README.md` covering:
    copy-paste without deciding:
 
    ```markdown
-   | Repo secret name | Passed as | Value |
+   | Repo secret name | Action input | Value |
    |---|---|---|
-   | `FOO_API_TOKEN` | `api-token: ${{ secrets.FOO_API_TOKEN }}` | ... |
+   | `FOO_API_TOKEN` | `api-token` | ... |
    ```
 
    Follow the table with a subsection per secret documenting:
