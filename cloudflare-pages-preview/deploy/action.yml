@@ -1,0 +1,137 @@
+name: Cloudflare Pages PR Preview — Deploy
+description: >-
+  Deploys a pre-built static HTML directory to Cloudflare Pages under a per-PR
+  branch alias, injects noindex headers/meta tags, and posts/updates a sticky
+  PR comment with the preview URLs.
+
+inputs:
+  directory:
+    description: Path to the built static HTML directory (e.g. blog/public)
+    required: true
+  project-name:
+    description: Cloudflare Pages project name (must already exist in the CF dashboard)
+    required: true
+  api-token:
+    description: Cloudflare API token with Pages:Edit permission on the project
+    required: true
+  account-id:
+    description: Cloudflare account ID
+    required: true
+  branch:
+    description: Cloudflare Pages branch alias for this deployment
+    required: false
+    default: pr-${{ github.event.pull_request.number }}
+  inject-noindex:
+    description: >-
+      Whether to inject X-Robots-Tag headers (via _headers file) and a
+      <meta name="robots"> tag into all HTML pages to prevent search engine
+      indexing of the preview. Set to 'false' to skip.
+    required: false
+    default: 'true'
+  comment-marker:
+    description: HTML comment marker used to identify and update the sticky PR comment
+    required: false
+    default: '<!-- cf-pages-preview -->'
+  comment-title:
+    description: Heading shown in the sticky PR comment
+    required: false
+    default: 'Preview Deployed'
+  github-token:
+    description: GitHub token for posting/updating the PR comment
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  deployment-url:
+    description: URL of the specific deployment (changes per push)
+    value: ${{ steps.deploy.outputs.deployment-url }}
+  alias-url:
+    description: Stable branch-alias URL (same across pushes to this PR)
+    value: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+
+runs:
+  using: composite
+  steps:
+    # Prevent preview deployments from being indexed by search engines.
+    # Cloudflare Pages serves _headers as HTTP headers for matching paths.
+    # X-Robots-Tag covers all content types (HTML, RSS, sitemaps, etc.)
+    - name: Add noindex headers
+      if: inputs.inject-noindex == 'true'
+      shell: bash
+      env:
+        DIR: ${{ inputs.directory }}
+      run: |
+        cat > "${DIR}/_headers" <<'EOF'
+        /*
+          X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
+        EOF
+
+    # Also inject a <meta> tag into every HTML page as belt-and-suspenders
+    # in case the site is later served from somewhere that ignores _headers.
+    - name: Inject noindex meta tag
+      if: inputs.inject-noindex == 'true'
+      shell: bash
+      env:
+        DIR: ${{ inputs.directory }}
+      run: |
+        find "${DIR}" -name '*.html' -print0 | \
+          xargs -0 -r sed -i 's|<head>|<head><meta name="robots" content="noindex, nofollow, noarchive, nosnippet">|'
+
+    - name: Deploy to Cloudflare Pages
+      id: deploy
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ inputs.api-token }}
+        accountId: ${{ inputs.account-id }}
+        command: pages deploy ${{ inputs.directory }} --project-name=${{ inputs.project-name }} --branch=${{ inputs.branch }}
+
+    - name: Comment with preview URL
+      uses: actions/github-script@v8
+      env:
+        DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+        ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+        COMMENT_TITLE: ${{ inputs.comment-title }}
+        INJECT_NOINDEX: ${{ inputs.inject-noindex }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { owner, repo } = context.repo;
+          const prNumber = context.payload.pull_request.number;
+          const deployUrl = process.env.DEPLOY_URL;
+          const aliasUrl = process.env.ALIAS_URL || deployUrl;
+          const marker = process.env.COMMENT_MARKER;
+          const title = process.env.COMMENT_TITLE;
+          const noindex = process.env.INJECT_NOINDEX === 'true';
+
+          const noindexNote = noindex
+            ? ' All pages served with `noindex, nofollow` — search engines will not crawl this preview.'
+            : '';
+
+          const body = `${marker}
+          ## ${title}
+
+          | | |
+          |---|---|
+          | **Preview (stable)** | ${aliasUrl} |
+          | **This commit** | ${deployUrl} |
+          | **Commit** | \`${context.sha.slice(0, 7)}\` |
+
+          _Includes drafts and future-dated posts.${noindexNote}_`;
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner, repo, issue_number: prNumber
+          });
+          const existing = comments.find(c =>
+            c.user.type === 'Bot' && c.body.includes(marker)
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner, repo, comment_id: existing.id, body
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prNumber, body
+            });
+          }

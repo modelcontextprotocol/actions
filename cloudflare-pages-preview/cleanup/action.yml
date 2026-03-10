@@ -1,0 +1,87 @@
+name: Cloudflare Pages PR Preview — Cleanup
+description: >-
+  Deletes all Cloudflare Pages deployments for a PR's branch alias and updates
+  the sticky PR comment to indicate the preview has been cleaned up. Intended
+  to run on pull_request.closed.
+
+inputs:
+  project-name:
+    description: Cloudflare Pages project name
+    required: true
+  api-token:
+    description: Cloudflare API token with Pages:Edit permission on the project
+    required: true
+  account-id:
+    description: Cloudflare account ID
+    required: true
+  branch:
+    description: Cloudflare Pages branch alias whose deployments should be deleted
+    required: false
+    default: pr-${{ github.event.pull_request.number }}
+  comment-marker:
+    description: HTML comment marker used to locate the sticky PR comment
+    required: false
+    default: '<!-- cf-pages-preview -->'
+  github-token:
+    description: GitHub token for updating the PR comment
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Delete preview deployments
+      shell: bash
+      env:
+        CF_API_TOKEN: ${{ inputs.api-token }}
+        CF_ACCOUNT_ID: ${{ inputs.account-id }}
+        CF_PROJECT: ${{ inputs.project-name }}
+        PR_BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        api="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PROJECT}/deployments"
+
+        echo "Listing deployments for branch alias: ${PR_BRANCH}"
+        # Cloudflare paginates at 25/page. One PR rarely has >25 deploys, but
+        # loop until the branch alias returns empty just in case of a long-
+        # running PR with many pushes.
+        while :; do
+          ids=$(curl -sS -H "Authorization: Bearer ${CF_API_TOKEN}" "${api}?per_page=25" \
+            | jq -r --arg b "$PR_BRANCH" '.result[] | select(.deployment_trigger.metadata.branch == $b) | .id')
+
+          if [ -z "$ids" ]; then
+            echo "No deployments remaining for ${PR_BRANCH}."
+            break
+          fi
+
+          for id in $ids; do
+            echo "Deleting deployment ${id}"
+            curl -sS -X DELETE -H "Authorization: Bearer ${CF_API_TOKEN}" "${api}/${id}?force=true" \
+              | jq -r '"  → success=\(.success) errors=\(.errors // [])"'
+          done
+        done
+
+    - name: Update PR comment
+      uses: actions/github-script@v8
+      env:
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { owner, repo } = context.repo;
+          const prNumber = context.payload.pull_request.number;
+          const marker = process.env.COMMENT_MARKER;
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner, repo, issue_number: prNumber
+          });
+          const existing = comments.find(c =>
+            c.user.type === 'Bot' && c.body.includes(marker)
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner, repo, comment_id: existing.id,
+              body: `${marker}\n## Preview\n\n_Preview deployments for this PR have been cleaned up._`
+            });
+          }
