@@ -25,19 +25,45 @@ and cleaning them up when the PR closes.
 
 ## Required secrets
 
-Configure these in the caller repo (**Settings → Secrets and variables →
-Actions**) and pass them to the action via `with:`:
+Create these secrets in the caller repo (GitHub → repo → **Settings → Secrets
+and variables → Actions → New repository secret**), then pass them into the
+action's `api-token` and `account-id` inputs. Secret names are your choice —
+the example below uses `CF_PREVIEW_API_TOKEN` / `CF_PREVIEW_ACCOUNT_ID`.
 
-| Secret | Passed as | What it is |
+Both `deploy` and `cleanup` need the same two secrets.
+
+### Cloudflare API token → `api-token` input
+
+**Where to get it:** Cloudflare dashboard → **My Profile → API Tokens →
+Create Token → Create Custom Token**.
+
+**Permissions to configure:**
+
+| Type | Item | Permission |
 |---|---|---|
-| Cloudflare API token | `api-token` | Token with **`Pages:Edit`** permission scoped **only** to the target Pages project. Do not reuse a general-purpose or account-wide Cloudflare token — create a dedicated token per project. |
-| Cloudflare account ID | `account-id` | Found in the Cloudflare dashboard sidebar. Not actually secret, but stored as one to co-locate with the token. |
+| Account | Cloudflare Pages | Edit |
 
-Both actions require the same two secrets.
+**Account resources:** restrict to the single account that owns your Pages
+project. Do **not** reuse an account-wide or general-purpose token — create a
+dedicated one per project so a leak can't touch anything else.
 
-The default `github-token` (`${{ github.token }}`) is sufficient for PR
-commenting with the standard `pull-requests: write` permission — no additional
-secret is needed there unless you want to comment as a different identity.
+Copy the token value into a repo secret, e.g. `CF_PREVIEW_API_TOKEN`.
+
+### Cloudflare account ID → `account-id` input
+
+**Where to get it:** Cloudflare dashboard → select any domain or the Workers
+& Pages overview → the **Account ID** is in the right sidebar (copyable hex
+string, e.g. `a1b2c3d4...`).
+
+Not actually secret, but store it as a repo secret (e.g.
+`CF_PREVIEW_ACCOUNT_ID`) to keep it co-located with the token.
+
+### GitHub token
+
+The action defaults to `${{ github.token }}` (the automatic
+`GITHUB_TOKEN`), which is sufficient for PR commenting with
+`pull-requests: write` permission. No additional secret is needed unless you
+want comments posted under a different identity.
 
 ## Caller workflow requirements
 
