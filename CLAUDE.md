@@ -116,10 +116,12 @@ Each action (or group) must have a `README.md` covering:
 
 1. **What it does** — one paragraph per action
 2. **Prerequisites** — external resources that must exist (CF project, etc.)
-3. **Caller requirements** — `permissions:`, fork-PR guards, concurrency,
-   required secrets
-4. **Usage** — a minimal but complete caller workflow example
-5. **Inputs/outputs** — tables with name, required, default, description
+3. **Required secrets** — dedicated section listing every secret the caller
+   must configure: what it is, minimum permission scope, and which action
+   input it maps to. If no secrets are needed, state that explicitly.
+4. **Caller requirements** — `permissions:`, fork-PR guards, concurrency
+5. **Usage** — a minimal but complete caller workflow example
+6. **Inputs/outputs** — tables with name, required, default, description
 
 ## Registering the action
 

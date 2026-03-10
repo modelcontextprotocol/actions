@@ -21,9 +21,23 @@ and cleaning them up when the PR closes.
 
 - A **Cloudflare Pages project** must be created in the Cloudflare dashboard
   first. Pass its name as `project-name`.
-- A **Cloudflare API token** with `Pages:Edit` permission scoped to that
-  project. Do not reuse a general-purpose token.
-- GitHub Actions secrets for the token and account ID.
+- Two GitHub Actions secrets (see below).
+
+## Required secrets
+
+Configure these in the caller repo (**Settings → Secrets and variables →
+Actions**) and pass them to the action via `with:`:
+
+| Secret | Passed as | What it is |
+|---|---|---|
+| Cloudflare API token | `api-token` | Token with **`Pages:Edit`** permission scoped **only** to the target Pages project. Do not reuse a general-purpose or account-wide Cloudflare token — create a dedicated token per project. |
+| Cloudflare account ID | `account-id` | Found in the Cloudflare dashboard sidebar. Not actually secret, but stored as one to co-locate with the token. |
+
+Both actions require the same two secrets.
+
+The default `github-token` (`${{ github.token }}`) is sufficient for PR
+commenting with the standard `pull-requests: write` permission — no additional
+secret is needed there unless you want to comment as a different identity.
 
 ## Caller workflow requirements
 
