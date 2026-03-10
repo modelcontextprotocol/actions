@@ -25,45 +25,40 @@ and cleaning them up when the PR closes.
 
 ## Required secrets
 
-Create these secrets in the caller repo (GitHub → repo → **Settings → Secrets
-and variables → Actions → New repository secret**), then pass them into the
-action's `api-token` and `account-id` inputs. Secret names are your choice —
-the example below uses `CF_PREVIEW_API_TOKEN` / `CF_PREVIEW_ACCOUNT_ID`.
+Create these secrets in the caller repo: GitHub → repo → **Settings → Secrets
+and variables → Actions → New repository secret**.
+
+| Repo secret name | Passed as | Value |
+|---|---|---|
+| `CF_PAGES_PREVIEW_API_TOKEN` | `api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}` | Cloudflare API token with `Account → Cloudflare Pages → Edit` permission, scoped to the single account that owns your Pages project |
+| `CF_PAGES_PREVIEW_ACCOUNT_ID` | `account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}` | Cloudflare account ID (hex string from the dashboard sidebar) |
 
 Both `deploy` and `cleanup` need the same two secrets.
 
-### Cloudflare API token → `api-token` input
+### `CF_PAGES_PREVIEW_API_TOKEN`
 
-**Where to get it:** Cloudflare dashboard → **My Profile → API Tokens →
-Create Token → Create Custom Token**.
-
-**Permissions to configure:**
+Cloudflare dashboard → **My Profile → API Tokens → Create Token → Create
+Custom Token**. Configure:
 
 | Type | Item | Permission |
 |---|---|---|
 | Account | Cloudflare Pages | Edit |
 
-**Account resources:** restrict to the single account that owns your Pages
-project. Do **not** reuse an account-wide or general-purpose token — create a
-dedicated one per project so a leak can't touch anything else.
+Under **Account Resources**, restrict to the single account that owns your
+Pages project. Do **not** reuse an account-wide or general-purpose token — a
+dedicated per-project token limits the blast radius of a leak.
 
-Copy the token value into a repo secret, e.g. `CF_PREVIEW_API_TOKEN`.
+### `CF_PAGES_PREVIEW_ACCOUNT_ID`
 
-### Cloudflare account ID → `account-id` input
+Cloudflare dashboard → select any domain, or the Workers & Pages overview →
+the **Account ID** is in the right sidebar (copyable hex string).
 
-**Where to get it:** Cloudflare dashboard → select any domain or the Workers
-& Pages overview → the **Account ID** is in the right sidebar (copyable hex
-string, e.g. `a1b2c3d4...`).
+Not actually secret, but stored as one to keep it co-located with the token.
 
-Not actually secret, but store it as a repo secret (e.g.
-`CF_PREVIEW_ACCOUNT_ID`) to keep it co-located with the token.
+### GitHub token (no setup needed)
 
-### GitHub token
-
-The action defaults to `${{ github.token }}` (the automatic
-`GITHUB_TOKEN`), which is sufficient for PR commenting with
-`pull-requests: write` permission. No additional secret is needed unless you
-want comments posted under a different identity.
+The action defaults to `${{ github.token }}` (the automatic `GITHUB_TOKEN`),
+which is sufficient for PR commenting with `pull-requests: write` permission.
 
 ## Caller workflow requirements
 
@@ -110,8 +105,8 @@ jobs:
         with:
           directory: site/public
           project-name: my-cf-pages-project
-          api-token: ${{ secrets.CF_PREVIEW_API_TOKEN }}
-          account-id: ${{ secrets.CF_PREVIEW_ACCOUNT_ID }}
+          api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
+          account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
 
   cleanup:
     if: >-
@@ -122,8 +117,8 @@ jobs:
       - uses: modelcontextprotocol/actions/cloudflare-pages-preview/cleanup@main
         with:
           project-name: my-cf-pages-project
-          api-token: ${{ secrets.CF_PREVIEW_API_TOKEN }}
-          account-id: ${{ secrets.CF_PREVIEW_ACCOUNT_ID }}
+          api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
+          account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
 ```
 
 Note: `cleanup` does **not** require `actions/checkout` — it only calls the

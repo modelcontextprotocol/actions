@@ -116,16 +116,23 @@ Each action (or group) must have a `README.md` covering:
 
 1. **What it does** — one paragraph per action
 2. **Prerequisites** — external resources that must exist (CF project, etc.)
-3. **Required secrets** — dedicated section covering every secret the caller
-   must configure. For each secret, document:
+3. **Required secrets** — a dedicated section starting with a table with
+   **concrete** secret names and wiring. Prescribe exact names so callers can
+   copy-paste without deciding:
+
+   ```markdown
+   | Repo secret name | Passed as | Value |
+   |---|---|---|
+   | `FOO_API_TOKEN` | `api-token: ${{ secrets.FOO_API_TOKEN }}` | ... |
+   ```
+
+   Follow the table with a subsection per secret documenting:
    - **Where to get it** — exact navigation path in the external dashboard/UI
      (e.g. "Cloudflare → My Profile → API Tokens → Create Token")
-   - **Minimum permission scope** — the least privilege that makes the action
-     work
-   - **Which action input it maps to** — so callers know how to wire
-     `secrets.*` into `with:`
-   - **How to store it** — "repo secret named e.g. `FOO_TOKEN`" (suggest a
-     name; actual name is caller's choice)
+   - **Minimum permission scope** — the least privilege that makes the
+     action work
+
+   The usage example must reference the same concrete secret names.
 
    If no secrets are needed, state that explicitly.
 4. **Caller requirements** — `permissions:`, fork-PR guards, concurrency
