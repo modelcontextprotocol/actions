@@ -27,6 +27,16 @@ inputs:
       and what you mark as a required status check in branch protection.
     required: false
     default: slash-commands/approval
+  invalidate-on-push:
+    description: >-
+      When 'true', a push (synchronize event) forces the status to pending
+      regardless of labels. This must match the main slash-commands action's
+      invalidate-on-push setting. Without this, on a push the event payload
+      still contains the pre-push label state, so this action would set
+      success on the new SHA (racing with the handle job removing the label)
+      and auto-merge can slip through.
+    required: false
+    default: 'true'
 
 outputs:
   state:
@@ -43,6 +53,7 @@ runs:
         APPROVED_LABEL: ${{ inputs.approved-label }}
         HOLD_LABEL: ${{ inputs.hold-label }}
         STATUS_CONTEXT: ${{ inputs.status-context }}
+        INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -53,21 +64,32 @@ runs:
             return;
           }
           const sha = pr.head.sha;
-          const labels = pr.labels.map(l => l.name);
           const approvedLabel = process.env.APPROVED_LABEL;
           const holdLabel = process.env.HOLD_LABEL;
           const statusContext = process.env.STATUS_CONTEXT;
+          const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
 
+          // On push, the event payload's labels reflect the PRE-push state.
+          // If invalidation is on, the handle job is about to (or already did)
+          // remove the approved label in parallel — but we can't see that here.
+          // Force pending so auto-merge can't slip through on a stale success.
+          // The subsequent unlabeled event will re-evaluate (and stay pending).
           let state, description;
-          if (labels.includes(holdLabel)) {
-            state = 'failure';
-            description = `Blocked by ${holdLabel} — comment /unhold to clear`;
-          } else if (labels.includes(approvedLabel)) {
-            state = 'success';
-            description = `Approved via /lgtm`;
-          } else {
+          if (invalidateOnPush && context.payload.action === 'synchronize') {
             state = 'pending';
-            description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
+            description = `New commits pushed — awaiting re-approval via /lgtm`;
+          } else {
+            const labels = pr.labels.map(l => l.name);
+            if (labels.includes(holdLabel)) {
+              state = 'failure';
+              description = `Blocked by ${holdLabel} — comment /unhold to clear`;
+            } else if (labels.includes(approvedLabel)) {
+              state = 'success';
+              description = `Approved via /lgtm`;
+            } else {
+              state = 'pending';
+              description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
+            }
           }
 
           await github.rest.repos.createCommitStatus({
