@@ -1,0 +1,74 @@
+name: PR Slash Commands
+description: >-
+  Handles /lgtm and /hold slash commands on PRs. Authorized users
+  (core maintainers or CODEOWNERS of the PR's changed files) can approve via
+  /lgtm (adds a label + bot APPROVE review) or block via /hold. Approval is
+  invalidated when new commits are pushed.
+
+inputs:
+  github-token:
+    description: >-
+      Token for API calls. MUST have read:org scope to check team membership —
+      the default GITHUB_TOKEN cannot do this. Use a fine-grained PAT with
+      Organization Members:read + Repository Contents:read + Pull requests:write
+      + Issues:write, or a GitHub App installation token with equivalent perms.
+    required: true
+  approved-label:
+    description: Label added by /lgtm and used by the status job as the merge gate
+    required: false
+    default: approved
+  hold-label:
+    description: Label added by /hold to block merging
+    required: false
+    default: do-not-merge/hold
+  always-allow-teams:
+    description: >-
+      Comma-separated team slugs (within the repo's org) whose members may
+      /lgtm or /hold any PR regardless of CODEOWNERS
+    required: false
+    default: core-maintainers
+  codeowners-path:
+    description: Path to the CODEOWNERS file (fetched from the PR base branch)
+    required: false
+    default: .github/CODEOWNERS
+  invalidate-on-push:
+    description: >-
+      Remove the approved label and dismiss the bot review when new commits
+      are pushed to the PR. Set to 'false' to keep approval across pushes.
+    required: false
+    default: 'true'
+  submit-review:
+    description: >-
+      Whether to submit a bot APPROVE review alongside the label on /lgtm.
+      Set to 'false' to rely on the label alone.
+    required: false
+    default: 'true'
+
+outputs:
+  result:
+    description: >-
+      One of: lgtm-added, lgtm-removed, hold-added, hold-removed, invalidated,
+      unauthorized, self-lgtm-blocked, noop
+    value: ${{ steps.handle.outputs.result }}
+  actor:
+    description: Login of the user who triggered the action (commenter)
+    value: ${{ steps.handle.outputs.actor }}
+
+runs:
+  using: composite
+  steps:
+    - name: Handle slash command
+      id: handle
+      uses: actions/github-script@v8
+      env:
+        APPROVED_LABEL: ${{ inputs.approved-label }}
+        HOLD_LABEL: ${{ inputs.hold-label }}
+        ALWAYS_ALLOW_TEAMS: ${{ inputs.always-allow-teams }}
+        CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
+        INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
+        SUBMIT_REVIEW: ${{ inputs.submit-review }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const main = require(process.env.GITHUB_ACTION_PATH + '/main.js');
+          await main({ github, context, core });
