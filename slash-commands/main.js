@@ -1,8 +1,8 @@
 // Handler for /lgtm, /hold, and /stageblog slash commands. Called by actions/github-script
-// via `require(github.action_path + '/main.js')({ github, context, core })`.
+// via `require(...)({ github, context, core, orgClient })`.
 // See action.yml for input wiring via env vars.
 
-module.exports = async ({ github, context, core }) => {
+module.exports = async ({ github, context, core, orgClient }) => {
   const { owner, repo } = context.repo;
   const approvedLabel = process.env.APPROVED_LABEL;
   const holdLabel = process.env.HOLD_LABEL;
@@ -13,9 +13,10 @@ module.exports = async ({ github, context, core }) => {
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const reviewMarker = '<!-- slash-commands-lgtm -->';
   // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
-  // reactions, labels, and reviews show as github-actions[bot]. The PAT is
-  // passed separately and used ONLY for team-membership checks (read:org).
-  const orgToken = process.env.ORG_TOKEN;
+  // reactions, labels, and reviews show as github-actions[bot]. `orgClient`
+  // is a separate Octokit instance authed with the PAT and used ONLY for
+  // team-membership checks (read:org). It must be constructed by the caller
+  // because @actions/github is not resolvable from this file.
 
   function setResult(result, actor) {
     core.setOutput('result', result);
@@ -80,13 +81,9 @@ module.exports = async ({ github, context, core }) => {
     const key = `${teamSlug}:${user}`;
     if (teamMembershipCache.has(key)) return teamMembershipCache.get(key);
     try {
-      const { data } = await github.request(
-        'GET /orgs/{org}/teams/{team_slug}/memberships/{username}',
-        {
-          org: owner, team_slug: teamSlug, username: user,
-          headers: { authorization: `token ${orgToken}` },
-        },
-      );
+      const { data } = await orgClient.rest.teams.getMembershipForUserInOrg({
+        org: owner, team_slug: teamSlug, username: user,
+      });
       const ok = data.state === 'active';
       teamMembershipCache.set(key, ok);
       return ok;
