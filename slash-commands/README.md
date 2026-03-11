@@ -29,9 +29,10 @@ must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
 their own PR, receive a 👎 reaction with no further noise. Successful commands
 receive a 👍 reaction.
 
-The caller workflow adds a separate `status` job that reports a required check
-which passes only when `approved` is present and `do-not-merge/hold` is absent
-— making the labels an actual merge gate via branch protection.
+The caller workflow pairs this with the `slash-commands/status` sub-action,
+which sets a commit status that stays **pending** until `approved` is present
+and goes **failure** when `do-not-merge/hold` is present — making the labels
+an actual merge gate via branch protection without a red ❌ on every fresh PR.
 
 ## Prerequisites
 
@@ -87,7 +88,7 @@ on the caller repo _and_ have org-level **Members: read**.
 | | |
 |---|---|
 | **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`, `opened`, `reopened`, `labeled`, `unlabeled`) |
-| **Permissions** | `pull-requests: write`, `issues: write`, `contents: read`. If `/stageblog` is enabled, also `actions: write`. |
+| **Permissions** | `pull-requests: write`, `issues: write`, `contents: read`, `statuses: write`. If `/stageblog` is enabled, also `actions: write`. |
 | **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
 | **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
 
@@ -106,6 +107,7 @@ permissions:
   pull-requests: write
   issues: write
   contents: read
+  statuses: write
 
 jobs:
   handle:
@@ -120,25 +122,14 @@ jobs:
           always-allow-teams: core-maintainers,lead-maintainers
           # stageblog-workflow: stage-blog.yml  # uncomment to enable /stageblog
 
-  # Merge-gate status check — make this a required check in branch protection.
+  # Merge-gate commit status. Mark `slash-commands/approval` as a required
+  # status check in branch protection. This stays pending (yellow) until
+  # /lgtm adds the approved label — no red ❌ on fresh PRs.
   status:
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
-      - name: Require approval, block on hold
-        env:
-          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
-        run: |
-          echo "Labels: $LABELS"
-          if ! jq -e 'contains(["approved"])' <<<"$LABELS" > /dev/null; then
-            echo "::error::Missing 'approved' label — comment /lgtm"
-            exit 1
-          fi
-          if jq -e 'contains(["do-not-merge/hold"])' <<<"$LABELS" > /dev/null; then
-            echo "::error::'do-not-merge/hold' present — resolve, then /unhold"
-            exit 1
-          fi
-          echo "approved and not held"
+      - uses: modelcontextprotocol/actions/slash-commands/status@main
 ```
 
 ### Enabling `/stageblog` — companion workflow
@@ -207,6 +198,36 @@ jobs:
 |---|---|
 | `result` | One of: `lgtm-added`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
+
+## `slash-commands/status` sub-action
+
+Sets a commit status on the PR head SHA derived from the approval/hold labels.
+Use in a `status` job that runs on every `pull_request_target` event. The job
+itself always succeeds — the commit status it creates is what branch protection
+enforces. Make the `status-context` value a required status check.
+
+**States:**
+
+| Labels | Commit status | Description |
+|---|---|---|
+| `do-not-merge/hold` present | `failure` (❌) | Blocked by hold |
+| `approved` present, no hold | `success` (✅) | Approved via /lgtm |
+| neither | `pending` (🟡) | Awaiting /lgtm |
+
+**Inputs:**
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `github-token` | | `${{ github.token }}` | Token for the commit-status API. Workflow needs `statuses: write`. |
+| `approved-label` | | `approved` | Must match the main action's `approved-label` |
+| `hold-label` | | `do-not-merge/hold` | Must match the main action's `hold-label` |
+| `status-context` | | `slash-commands/approval` | Name shown in the merge box. Mark this as a required status check. |
+
+**Outputs:**
+
+| Output | Description |
+|---|---|
+| `state` | The commit status state set: `pending`, `success`, or `failure` |
 
 ## CODEOWNERS pattern support
 
