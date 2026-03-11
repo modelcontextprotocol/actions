@@ -250,6 +250,10 @@ module.exports = async ({ github, context, core }) => {
     // cancel is meaningless here — just ignore silently
     if (cancel) return setResult('noop', actor);
 
+    // Ack early — listFiles pagination + workflow dispatch can take a few
+    // seconds and the commenter otherwise gets no feedback until then.
+    await react(commentId, 'eyes');
+
     // Gate: PR must touch blog paths
     const blogRegexes = process.env.STAGEBLOG_PATHS
       .split(',').map(s => s.trim()).filter(Boolean).map(patternToRegex);
