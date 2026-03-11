@@ -99,11 +99,5 @@ runs:
       with:
         github-token: ${{ inputs.bot-token }}
         script: |
-          // Construct a second Octokit client authed with the PAT for
-          // org team-membership checks. This has to happen here, not in
-          // main.js, because @actions/github is only resolvable from
-          // inside the github-script bundle.
-          const { getOctokit } = require('@actions/github');
-          const orgClient = getOctokit(process.env.ORG_TOKEN);
           const main = require(process.env.GITHUB_ACTION_PATH + '/main.js');
-          await main({ github, context, core, orgClient });
+          await main({ github, context, core });
