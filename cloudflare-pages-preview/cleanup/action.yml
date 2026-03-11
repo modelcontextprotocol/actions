@@ -22,6 +22,13 @@ inputs:
     description: HTML comment marker used to locate the sticky PR comment
     required: false
     default: '<!-- cf-pages-preview -->'
+  comment-mode:
+    description: >-
+      Must match the deploy action's comment-mode. 'sticky' (default) updates
+      the single marker comment in place. 'repost' minimizes all marker
+      comments as OUTDATED and posts a final cleanup comment.
+    required: false
+    default: sticky
   github-token:
     description: GitHub token for updating the PR comment
     required: false
@@ -72,28 +79,10 @@ runs:
       uses: actions/github-script@v8
       env:
         COMMENT_MARKER: ${{ inputs.comment-marker }}
+        COMMENT_MODE: ${{ inputs.comment-mode }}
         PR_NUMBER: ${{ inputs.pr-number }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const { owner, repo } = context.repo;
-          const prNumber = Number(process.env.PR_NUMBER);
-          if (!prNumber) {
-            core.info('No PR number available — skipping comment update.');
-            return;
-          }
-          const marker = process.env.COMMENT_MARKER;
-
-          const { data: comments } = await github.rest.issues.listComments({
-            owner, repo, issue_number: prNumber
-          });
-          const existing = comments.find(c =>
-            c.user.type === 'Bot' && c.body.includes(marker)
-          );
-
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner, repo, comment_id: existing.id,
-              body: `${marker}\n## Preview\n\n_Preview deployments for this PR have been cleaned up._`
-            });
-          }
+          const main = require(process.env.GITHUB_ACTION_PATH + '/comment.js');
+          await main({ github, context, core });
