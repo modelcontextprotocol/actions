@@ -1,4 +1,4 @@
-// Handler for /lgtm and /hold slash commands. Called by actions/github-script
+// Handler for /lgtm, /hold, and /stageblog slash commands. Called by actions/github-script
 // via `require(github.action_path + '/main.js')({ github, context, core })`.
 // See action.yml for input wiring via env vars.
 
@@ -218,7 +218,7 @@ module.exports = async ({ github, context, core }) => {
   const commentId = context.payload.comment.id;
   const actor = context.payload.comment.user.login;
   const firstLine = commentBody.split('\n')[0].trim();
-  const m = firstLine.match(/^\/(lgtm|hold|unhold)\b\s*(cancel)?\s*$/i);
+  const m = firstLine.match(/^\/(lgtm|hold|unhold|stageblog)\b\s*(cancel)?\s*$/i);
   if (!m) return setResult('noop', actor);
 
   const cmd = m[1].toLowerCase();
@@ -238,6 +238,46 @@ module.exports = async ({ github, context, core }) => {
   if (!(await isAuthorized(actor, pr))) {
     await react(commentId, '-1');
     return setResult('unauthorized', actor);
+  }
+
+  // /stageblog — dispatch a caller-defined workflow with pinned head SHA
+  if (cmd === 'stageblog') {
+    const stageblogWorkflow = process.env.STAGEBLOG_WORKFLOW;
+    if (!stageblogWorkflow) {
+      await react(commentId, 'confused');
+      return setResult('stageblog-disabled', actor);
+    }
+    // cancel is meaningless here — just ignore silently
+    if (cancel) return setResult('noop', actor);
+
+    // Gate: PR must touch blog paths
+    const blogRegexes = process.env.STAGEBLOG_PATHS
+      .split(',').map(s => s.trim()).filter(Boolean).map(patternToRegex);
+    const files = await github.paginate(github.rest.pulls.listFiles, {
+      owner, repo, pull_number: prNumber, per_page: 100,
+    });
+    const touchesBlog = files.some(f => blogRegexes.some(r => r.test(f.filename)));
+    if (!touchesBlog) {
+      await react(commentId, '-1');
+      await github.rest.issues.createComment({
+        owner, repo, issue_number: prNumber,
+        body: `\`/stageblog\` refused — this PR does not touch any blog paths (\`${process.env.STAGEBLOG_PATHS}\`).`,
+      });
+      return setResult('stageblog-not-blog', actor);
+    }
+
+    // Dispatch — pin head SHA at time of comment
+    const headSha = pr.head.sha;
+    await github.rest.actions.createWorkflowDispatch({
+      owner, repo, workflow_id: stageblogWorkflow, ref: pr.base.ref,
+      inputs: { pr_number: String(prNumber), head_sha: headSha },
+    });
+    await react(commentId, 'rocket');
+    await github.rest.issues.createComment({
+      owner, repo, issue_number: prNumber,
+      body: `Blog staging triggered by @${actor} for \`${headSha.slice(0, 7)}\`. Watch the [**${stageblogWorkflow}** workflow](../actions/workflows/${stageblogWorkflow}) for the preview link.`,
+    });
+    return setResult('stageblog-dispatched', actor);
   }
 
   // Execute

@@ -1,9 +1,10 @@
 name: PR Slash Commands
 description: >-
-  Handles /lgtm and /hold slash commands on PRs. Authorized users
-  (core maintainers or CODEOWNERS of the PR's changed files) can approve via
-  /lgtm (adds a label + bot APPROVE review) or block via /hold. Approval is
-  invalidated when new commits are pushed.
+  Handles /lgtm, /hold, and /stageblog slash commands on PRs. Authorized
+  users (core maintainers or CODEOWNERS of the PR's changed files) can approve
+  via /lgtm (adds a label + bot APPROVE review), block via /hold, or trigger
+  a blog preview staging workflow via /stageblog. Approval is invalidated when
+  new commits are pushed.
 
 inputs:
   github-token:
@@ -43,12 +44,27 @@ inputs:
       Set to 'false' to rely on the label alone.
     required: false
     default: 'true'
+  stageblog-workflow:
+    description: >-
+      Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
+      invoked. Leave empty to disable the command. The workflow must accept
+      inputs 'pr_number' and 'head_sha'.
+    required: false
+    default: ''
+  stageblog-paths:
+    description: >-
+      Comma-separated glob patterns (CODEOWNERS-style: **, *, ?, leading /,
+      trailing /) matched against the PR's changed files. /stageblog is refused
+      if no file matches.
+    required: false
+    default: 'blog/**'
 
 outputs:
   result:
     description: >-
       One of: lgtm-added, lgtm-removed, hold-added, hold-removed, invalidated,
-      unauthorized, self-lgtm-blocked, noop
+      unauthorized, self-lgtm-blocked, stageblog-dispatched, stageblog-not-blog,
+      stageblog-disabled, noop
     value: ${{ steps.handle.outputs.result }}
   actor:
     description: Login of the user who triggered the action (commenter)
@@ -67,6 +83,8 @@ runs:
         CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
         INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
+        STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
+        STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |

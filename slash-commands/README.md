@@ -1,7 +1,8 @@
 # slash-commands
 
-Reusable composite action that implements Prow-style `/lgtm` and `/hold` slash
-commands on pull requests, gated by team membership and CODEOWNERS.
+Reusable composite action that implements Prow-style `/lgtm`, `/hold`, and
+`/stageblog` slash commands on pull requests, gated by team membership and
+CODEOWNERS.
 
 ## What it does
 
@@ -14,6 +15,12 @@ Listens for PR comments and push events, then:
   review.
 - **`/hold`** — adds a `do-not-merge/hold` label (same authorization rule).
 - **`/hold cancel`** or **`/unhold`** — removes the hold label.
+- **`/stageblog`** — if the PR touches any blog paths (default `blog/**`),
+  dispatches a caller-defined `workflow_dispatch` workflow passing the PR
+  number and the PR's head SHA **at the time of the comment**. Intended for
+  letting maintainers manually stage blog previews for fork PRs (where the
+  normal `pull_request`-triggered preview workflow can't access secrets).
+  Disabled unless `stageblog-workflow` is set.
 - **New commits pushed** — removes the `approved` label, dismisses the bot
   review, and posts a brief comment asking for re-approval.
 
@@ -41,7 +48,7 @@ and variables → Actions → New repository secret**.
 
 | Repo secret name | Action input | Value |
 |---|---|---|
-| `SLASH_COMMANDS_TOKEN` | `github-token` | Fine-grained PAT (or GitHub App installation token) with **Organization → Members: read** plus **Repository → Contents: read, Pull requests: write, Issues: write** |
+| `SLASH_COMMANDS_TOKEN` | `github-token` | Fine-grained PAT (or GitHub App installation token) with **Organization → Members: read** plus **Repository → Contents: read, Pull requests: write, Issues: write**. If `/stageblog` is enabled, additionally **Repository → Actions: write**. |
 
 > **The default `${{ github.token }}` will NOT work.** Team-membership checks
 > (`GET /orgs/{org}/teams/{team}/memberships/{user}`) require `read:org` scope,
@@ -63,6 +70,7 @@ tokens → Generate new token**. Configure:
 | Repository permissions → Pull requests | Read and write |
 | Repository permissions → Issues | Read and write |
 | Organization permissions → Members | Read-only |
+| Repository permissions → Actions | Read and write _(only if `stageblog-workflow` is set)_ |
 
 Do not grant any write permissions beyond Pull requests + Issues. **Contents**
 must remain read-only — the action never writes code.
@@ -78,7 +86,7 @@ on the caller repo _and_ have org-level **Members: read**.
 | | |
 |---|---|
 | **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`, `opened`, `reopened`, `labeled`, `unlabeled`) |
-| **Permissions** | `pull-requests: write`, `issues: write`, `contents: read` |
+| **Permissions** | `pull-requests: write`, `issues: write`, `contents: read`. If `/stageblog` is enabled, also `actions: write`. |
 | **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
 | **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
 
@@ -109,6 +117,7 @@ jobs:
         with:
           github-token: ${{ secrets.SLASH_COMMANDS_TOKEN }}
           always-allow-teams: core-maintainers,lead-maintainers
+          # stageblog-workflow: stage-blog.yml  # uncomment to enable /stageblog
 
   # Merge-gate status check — make this a required check in branch protection.
   status:
@@ -131,6 +140,70 @@ jobs:
           echo "approved and not held"
 ```
 
+### Enabling `/stageblog` — companion workflow
+
+When `stageblog-workflow` is set, you also need a separate workflow in the
+caller repo that receives the dispatch. Example `stage-blog.yml`:
+
+```yaml
+name: Stage Blog (fork PRs)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.head_sha }}   # pinned — do NOT re-fetch the PR head
+
+      # ... your blog build steps → output to blog/public ...
+
+      - id: deploy
+        uses: modelcontextprotocol/actions/cloudflare-pages-preview/deploy@main
+        with:
+          directory: blog/public
+          project-name: mcp-blog-preview
+          api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
+          account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
+          branch: pr-${{ inputs.pr_number }}
+
+      # NOTE: cloudflare-pages-preview/deploy reads the PR number from
+      # context.payload.pull_request, which is undefined on workflow_dispatch.
+      # Post the preview comment yourself:
+      - uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: `Blog preview: ${process.env.PREVIEW_URL}`,
+            });
+```
+
+> **Known limitation:** `cloudflare-pages-preview/deploy` currently assumes
+> `context.payload.pull_request` exists for its sticky-comment step, which is
+> not the case on `workflow_dispatch`. Until the deploy action accepts an
+> explicit `pr-number` input, post the preview comment from the caller
+> workflow as shown above. (Fixing deploy is a follow-up.)
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -142,12 +215,14 @@ jobs:
 | `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof) |
 | `invalidate-on-push` | | `'true'` | Remove `approved` label + dismiss bot review + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
 | `submit-review` | | `'true'` | Submit a bot APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
+| `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
+| `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `result` | One of: `lgtm-added`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `self-lgtm-blocked`, `noop` |
+| `result` | One of: `lgtm-added`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## CODEOWNERS pattern support
@@ -177,5 +252,9 @@ Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
   from the default-branch workflow definition. The action does not check out
   PR code.
 - **Self-approval** — explicitly blocked before the auth check.
+- **`/stageblog` SHA pinning** — the dispatch passes `pr.head.sha` captured at
+  the moment the maintainer comments. The companion workflow **must** check
+  out `inputs.head_sha` (not `refs/pull/N/head` or `pr.head.ref`) so a fork
+  author cannot push new commits between the maintainer's review and the build.
 - **Review provenance** — the bot review body always names the real approver
   ("on behalf of @login"), even though GitHub shows the review as bot-authored.
