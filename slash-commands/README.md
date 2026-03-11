@@ -208,11 +208,17 @@ enforces. Make the `status-context` value a required status check.
 
 **States:**
 
-| Labels | Commit status | Description |
+| Condition | Commit status | Description |
 |---|---|---|
+| `synchronize` event + `invalidate-on-push: true` | `pending` (🟡) | New commits — re-approve |
 | `do-not-merge/hold` present | `failure` (❌) | Blocked by hold |
 | `approved` present, no hold | `success` (✅) | Approved via /lgtm |
-| neither | `pending` (🟡) | Awaiting /lgtm |
+| otherwise | `pending` (🟡) | Awaiting /lgtm |
+
+The `synchronize` special-case is a race guard: the event payload's labels
+reflect the *pre-push* state, so without it this action would read a stale
+`approved` and set `success` on the new SHA while the `handle` job is still
+removing the label in parallel — letting auto-merge slip through.
 
 **Inputs:**
 
@@ -222,6 +228,7 @@ enforces. Make the `status-context` value a required status check.
 | `approved-label` | | `approved` | Must match the main action's `approved-label` |
 | `hold-label` | | `do-not-merge/hold` | Must match the main action's `hold-label` |
 | `status-context` | | `slash-commands/approval` | Name shown in the merge box. Mark this as a required status check. |
+| `invalidate-on-push` | | `'true'` | On `synchronize`, force pending regardless of labels. **Must match** the main action's `invalidate-on-push`. Disabling this opens an auto-merge race. |
 
 **Outputs:**
 
