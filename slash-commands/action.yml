@@ -9,19 +9,19 @@ description: >-
 inputs:
   github-token:
     description: >-
-      Token for org team-membership checks and workflow dispatch. MUST have
-      read:org scope — the default GITHUB_TOKEN cannot do this. Use a
-      fine-grained PAT with Organization Members:read (+ Actions:write if
-      using /stageblog), or a GitHub App installation token with equivalent
-      perms.
+      Token used for org team-membership checks only. MUST have read:org
+      scope — the default GITHUB_TOKEN cannot do this. Use a fine-grained PAT
+      with Organization Members:read, or a GitHub App installation token with
+      the same.
     required: true
   bot-token:
     description: >-
-      Token used for user-visible side effects (comments, reactions, labels,
-      reviews). Defaults to the automatic GITHUB_TOKEN so these show as
-      authored by github-actions[bot]. The caller workflow must grant this
-      token the necessary repo permissions (pull-requests: write,
-      issues: write).
+      Token used for all repo API calls: comments, reactions, labels, reviews,
+      CODEOWNERS fetch, listFiles, and workflow dispatch. Defaults to the
+      automatic GITHUB_TOKEN so user-visible side effects show as authored by
+      github-actions[bot]. The caller workflow must grant this token the
+      necessary permissions (pull-requests: write, issues: write,
+      contents: read; plus actions: write for /stageblog).
     required: false
     default: ${{ github.token }}
   approved-label:
@@ -95,9 +95,9 @@ runs:
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
-        BOT_TOKEN: ${{ inputs.bot-token }}
+        ORG_TOKEN: ${{ inputs.github-token }}
       with:
-        github-token: ${{ inputs.github-token }}
+        github-token: ${{ inputs.bot-token }}
         script: |
           const main = require(process.env.GITHUB_ACTION_PATH + '/main.js');
           await main({ github, context, core });

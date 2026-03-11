@@ -12,13 +12,10 @@ module.exports = async ({ github, context, core }) => {
   const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const reviewMarker = '<!-- slash-commands-lgtm -->';
-
-  // Separate client for user-visible side effects (comments, reactions,
-  // labels, reviews). Uses github.token so everything shows as authored by
-  // github-actions[bot] instead of the PAT's identity. The PAT (`github`)
-  // is still used for team-membership checks (needs read:org), CODEOWNERS
-  // fetch, listFiles, pulls.get, and workflow dispatch.
-  const bot = require('@actions/github').getOctokit(process.env.BOT_TOKEN);
+  // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
+  // reactions, labels, and reviews show as github-actions[bot]. The PAT is
+  // passed separately and used ONLY for team-membership checks (read:org).
+  const orgToken = process.env.ORG_TOKEN;
 
   function setResult(result, actor) {
     core.setOutput('result', result);
@@ -83,9 +80,13 @@ module.exports = async ({ github, context, core }) => {
     const key = `${teamSlug}:${user}`;
     if (teamMembershipCache.has(key)) return teamMembershipCache.get(key);
     try {
-      const { data } = await github.rest.teams.getMembershipForUserInOrg({
-        org: owner, team_slug: teamSlug, username: user,
-      });
+      const { data } = await github.request(
+        'GET /orgs/{org}/teams/{team_slug}/memberships/{username}',
+        {
+          org: owner, team_slug: teamSlug, username: user,
+          headers: { authorization: `token ${orgToken}` },
+        },
+      );
       const ok = data.state === 'active';
       teamMembershipCache.set(key, ok);
       return ok;
@@ -157,13 +158,13 @@ module.exports = async ({ github, context, core }) => {
 
   // --- Label & review helpers -------------------------------------
   async function addLabel(prNumber, label) {
-    await bot.rest.issues.addLabels({
+    await github.rest.issues.addLabels({
       owner, repo, issue_number: prNumber, labels: [label],
     });
   }
   async function removeLabel(prNumber, label) {
     try {
-      await bot.rest.issues.removeLabel({
+      await github.rest.issues.removeLabel({
         owner, repo, issue_number: prNumber, name: label,
       });
     } catch (e) {
@@ -171,25 +172,25 @@ module.exports = async ({ github, context, core }) => {
     }
   }
   async function react(commentId, content) {
-    await bot.rest.reactions.createForIssueComment({
+    await github.rest.reactions.createForIssueComment({
       owner, repo, comment_id: commentId, content,
     });
   }
   async function submitApproval(prNumber, onBehalfOf) {
-    await bot.rest.pulls.createReview({
+    await github.rest.pulls.createReview({
       owner, repo, pull_number: prNumber, event: 'APPROVE',
       body: `${reviewMarker}\nApproved on behalf of @${onBehalfOf} via \`/lgtm\`.`,
     });
   }
   async function dismissBotApprovals(prNumber, reason) {
-    const reviews = await bot.paginate(bot.rest.pulls.listReviews, {
+    const reviews = await github.paginate(github.rest.pulls.listReviews, {
       owner, repo, pull_number: prNumber, per_page: 100,
     });
     for (const r of reviews) {
       if (r.state !== 'APPROVED') continue;
       if (!r.body || !r.body.includes(reviewMarker)) continue;
       try {
-        await bot.rest.pulls.dismissReview({
+        await github.rest.pulls.dismissReview({
           owner, repo, pull_number: prNumber, review_id: r.id,
           message: reason,
         });
@@ -210,7 +211,7 @@ module.exports = async ({ github, context, core }) => {
     if (!hasApproved) return setResult('noop');
     await removeLabel(pr.number, approvedLabel);
     await dismissBotApprovals(pr.number, 'New commits pushed — approval invalidated.');
-    await bot.rest.issues.createComment({
+    await github.rest.issues.createComment({
       owner, repo, issue_number: pr.number,
       body: `New commits were pushed — removed the \`${approvedLabel}\` label. Re-approve with \`/lgtm\`.`,
     });
@@ -270,7 +271,7 @@ module.exports = async ({ github, context, core }) => {
     const touchesBlog = files.some(f => blogRegexes.some(r => r.test(f.filename)));
     if (!touchesBlog) {
       await react(commentId, '-1');
-      await bot.rest.issues.createComment({
+      await github.rest.issues.createComment({
         owner, repo, issue_number: prNumber,
         body: `\`/stageblog\` refused — this PR does not touch any blog paths (\`${process.env.STAGEBLOG_PATHS}\`).`,
       });
@@ -284,7 +285,7 @@ module.exports = async ({ github, context, core }) => {
       inputs: { pr_number: String(prNumber), head_sha: headSha },
     });
     await react(commentId, 'rocket');
-    await bot.rest.issues.createComment({
+    await github.rest.issues.createComment({
       owner, repo, issue_number: prNumber,
       body: `Blog staging triggered by @${actor} for \`${headSha.slice(0, 7)}\`. Watch the [**${stageblogWorkflow}** workflow](../actions/workflows/${stageblogWorkflow}) for the preview link.`,
     });
