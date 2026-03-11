@@ -13,6 +13,13 @@ module.exports = async ({ github, context, core }) => {
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const reviewMarker = '<!-- slash-commands-lgtm -->';
 
+  // Separate client for user-visible side effects (comments, reactions,
+  // labels, reviews). Uses github.token so everything shows as authored by
+  // github-actions[bot] instead of the PAT's identity. The PAT (`github`)
+  // is still used for team-membership checks (needs read:org), CODEOWNERS
+  // fetch, listFiles, pulls.get, and workflow dispatch.
+  const bot = require('@actions/github').getOctokit(process.env.BOT_TOKEN);
+
   function setResult(result, actor) {
     core.setOutput('result', result);
     core.setOutput('actor', actor || '');
@@ -150,13 +157,13 @@ module.exports = async ({ github, context, core }) => {
 
   // --- Label & review helpers -------------------------------------
   async function addLabel(prNumber, label) {
-    await github.rest.issues.addLabels({
+    await bot.rest.issues.addLabels({
       owner, repo, issue_number: prNumber, labels: [label],
     });
   }
   async function removeLabel(prNumber, label) {
     try {
-      await github.rest.issues.removeLabel({
+      await bot.rest.issues.removeLabel({
         owner, repo, issue_number: prNumber, name: label,
       });
     } catch (e) {
@@ -164,25 +171,25 @@ module.exports = async ({ github, context, core }) => {
     }
   }
   async function react(commentId, content) {
-    await github.rest.reactions.createForIssueComment({
+    await bot.rest.reactions.createForIssueComment({
       owner, repo, comment_id: commentId, content,
     });
   }
   async function submitApproval(prNumber, onBehalfOf) {
-    await github.rest.pulls.createReview({
+    await bot.rest.pulls.createReview({
       owner, repo, pull_number: prNumber, event: 'APPROVE',
       body: `${reviewMarker}\nApproved on behalf of @${onBehalfOf} via \`/lgtm\`.`,
     });
   }
   async function dismissBotApprovals(prNumber, reason) {
-    const reviews = await github.paginate(github.rest.pulls.listReviews, {
+    const reviews = await bot.paginate(bot.rest.pulls.listReviews, {
       owner, repo, pull_number: prNumber, per_page: 100,
     });
     for (const r of reviews) {
       if (r.state !== 'APPROVED') continue;
       if (!r.body || !r.body.includes(reviewMarker)) continue;
       try {
-        await github.rest.pulls.dismissReview({
+        await bot.rest.pulls.dismissReview({
           owner, repo, pull_number: prNumber, review_id: r.id,
           message: reason,
         });
@@ -203,7 +210,7 @@ module.exports = async ({ github, context, core }) => {
     if (!hasApproved) return setResult('noop');
     await removeLabel(pr.number, approvedLabel);
     await dismissBotApprovals(pr.number, 'New commits pushed — approval invalidated.');
-    await github.rest.issues.createComment({
+    await bot.rest.issues.createComment({
       owner, repo, issue_number: pr.number,
       body: `New commits were pushed — removed the \`${approvedLabel}\` label. Re-approve with \`/lgtm\`.`,
     });
@@ -250,6 +257,10 @@ module.exports = async ({ github, context, core }) => {
     // cancel is meaningless here — just ignore silently
     if (cancel) return setResult('noop', actor);
 
+    // Ack early — listFiles pagination + workflow dispatch can take a few
+    // seconds and the commenter otherwise gets no feedback until then.
+    await react(commentId, 'eyes');
+
     // Gate: PR must touch blog paths
     const blogRegexes = process.env.STAGEBLOG_PATHS
       .split(',').map(s => s.trim()).filter(Boolean).map(patternToRegex);
@@ -259,7 +270,7 @@ module.exports = async ({ github, context, core }) => {
     const touchesBlog = files.some(f => blogRegexes.some(r => r.test(f.filename)));
     if (!touchesBlog) {
       await react(commentId, '-1');
-      await github.rest.issues.createComment({
+      await bot.rest.issues.createComment({
         owner, repo, issue_number: prNumber,
         body: `\`/stageblog\` refused — this PR does not touch any blog paths (\`${process.env.STAGEBLOG_PATHS}\`).`,
       });
@@ -273,7 +284,7 @@ module.exports = async ({ github, context, core }) => {
       inputs: { pr_number: String(prNumber), head_sha: headSha },
     });
     await react(commentId, 'rocket');
-    await github.rest.issues.createComment({
+    await bot.rest.issues.createComment({
       owner, repo, issue_number: prNumber,
       body: `Blog staging triggered by @${actor} for \`${headSha.slice(0, 7)}\`. Watch the [**${stageblogWorkflow}** workflow](../actions/workflows/${stageblogWorkflow}) for the preview link.`,
     });

@@ -48,12 +48,14 @@ and variables → Actions → New repository secret**.
 
 | Repo secret name | Action input | Value |
 |---|---|---|
-| `SLASH_COMMANDS_TOKEN` | `github-token` | Fine-grained PAT (or GitHub App installation token) with **Organization → Members: read** plus **Repository → Contents: read, Pull requests: write, Issues: write**. If `/stageblog` is enabled, additionally **Repository → Actions: write**. |
+| `SLASH_COMMANDS_TOKEN` | `github-token` | Fine-grained PAT (or GitHub App installation token) with **Organization → Members: read** plus **Repository → Contents: read**. If `/stageblog` is enabled, additionally **Repository → Actions: write**. |
 
-> **The default `${{ github.token }}` will NOT work.** Team-membership checks
-> (`GET /orgs/{org}/teams/{team}/memberships/{user}`) require `read:org` scope,
-> which the automatic `GITHUB_TOKEN` never has — even with a `permissions:`
-> block. You _must_ provide a PAT or App token.
+> **The default `${{ github.token }}` will NOT work** for `github-token` —
+> team-membership checks (`GET /orgs/{org}/teams/{team}/memberships/{user}`)
+> require `read:org` scope, which the automatic `GITHUB_TOKEN` never has. You
+> _must_ provide a PAT or App token. Comments, reactions, labels, and reviews
+> use a separate `bot-token` (defaults to `GITHUB_TOKEN`) so they show as
+> authored by `github-actions[bot]`.
 
 ### `SLASH_COMMANDS_TOKEN`
 
@@ -67,13 +69,12 @@ tokens → Generate new token**. Configure:
 | Resource owner | `modelcontextprotocol` (or your org) |
 | Repository access | **Only select repositories** → pick the caller repo |
 | Repository permissions → Contents | Read-only |
-| Repository permissions → Pull requests | Read and write |
-| Repository permissions → Issues | Read and write |
 | Organization permissions → Members | Read-only |
 | Repository permissions → Actions | Read and write _(only if `stageblog-workflow` is set)_ |
 
-Do not grant any write permissions beyond Pull requests + Issues. **Contents**
-must remain read-only — the action never writes code.
+The PAT does not need write permissions — all writes (comments, reactions,
+labels, reviews) use the workflow's `GITHUB_TOKEN`. **Contents** must remain
+read-only — the action never writes code.
 
 **Option B — GitHub App installation token:**
 
@@ -189,7 +190,8 @@ jobs:
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `github-token` | ✅ | — | PAT or App token with `read:org` + repo `pull-requests: write` + `issues: write` + `contents: read`. **Default `GITHUB_TOKEN` will not work** for team checks. |
+| `github-token` | ✅ | — | PAT or App token with `read:org` + repo `contents: read` (+ `actions: write` for `/stageblog`). Used for team membership checks, CODEOWNERS fetch, and workflow dispatch. **Default `GITHUB_TOKEN` will not work** for team checks. |
+| `bot-token` | | `${{ github.token }}` | Token for user-visible side effects (comments, reactions, labels, reviews) — defaults to `GITHUB_TOKEN` so these show as `github-actions[bot]`. Rarely needs overriding. |
 | `approved-label` | | `approved` | Label added by `/lgtm` |
 | `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
 | `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` or `/hold` any PR regardless of CODEOWNERS |
