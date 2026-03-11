@@ -26,6 +26,13 @@ inputs:
     description: GitHub token for updating the PR comment
     required: false
     default: ${{ github.token }}
+  pr-number:
+    description: >-
+      PR number to update the sticky comment on. Only needed on triggers
+      where context.payload.pull_request is unavailable (e.g. workflow_dispatch).
+      Defaults to the event payload's PR number.
+    required: false
+    default: ${{ github.event.pull_request.number }}
 
 runs:
   using: composite
@@ -65,11 +72,16 @@ runs:
       uses: actions/github-script@v8
       env:
         COMMENT_MARKER: ${{ inputs.comment-marker }}
+        PR_NUMBER: ${{ inputs.pr-number }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const { owner, repo } = context.repo;
-          const prNumber = context.payload.pull_request.number;
+          const prNumber = Number(process.env.PR_NUMBER);
+          if (!prNumber) {
+            core.info('No PR number available — skipping comment update.');
+            return;
+          }
           const marker = process.env.COMMENT_MARKER;
 
           const { data: comments } = await github.rest.issues.listComments({

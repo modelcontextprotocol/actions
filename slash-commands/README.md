@@ -172,37 +172,18 @@ jobs:
 
       # ... your blog build steps → output to blog/public ...
 
-      - id: deploy
-        uses: modelcontextprotocol/actions/cloudflare-pages-preview/deploy@main
+      - uses: modelcontextprotocol/actions/cloudflare-pages-preview/deploy@main
         with:
           directory: blog/public
           project-name: mcp-blog-preview
           api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
           account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
           branch: pr-${{ inputs.pr_number }}
-
-      # NOTE: cloudflare-pages-preview/deploy reads the PR number from
-      # context.payload.pull_request, which is undefined on workflow_dispatch.
-      # Post the preview comment yourself:
-      - uses: actions/github-script@v8
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-          PREVIEW_URL: ${{ steps.deploy.outputs.url }}
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(process.env.PR_NUMBER),
-              body: `Blog preview: ${process.env.PREVIEW_URL}`,
-            });
+          pr-number: ${{ inputs.pr_number }}
+          commit-sha: ${{ inputs.head_sha }}
+          comment-title: "Blog Preview (staged via /stageblog)"
+          comment-marker: "<!-- stage-blog-comment -->"
 ```
-
-> **Known limitation:** `cloudflare-pages-preview/deploy` currently assumes
-> `context.payload.pull_request` exists for its sticky-comment step, which is
-> not the case on `workflow_dispatch`. Until the deploy action accepts an
-> explicit `pr-number` input, post the preview comment from the caller
-> workflow as shown above. (Fixing deploy is a follow-up.)
 
 ## Inputs
 

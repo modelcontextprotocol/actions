@@ -40,6 +40,20 @@ inputs:
     description: GitHub token for posting/updating the PR comment
     required: false
     default: ${{ github.token }}
+  pr-number:
+    description: >-
+      PR number to comment on. Only needed on triggers where
+      context.payload.pull_request is unavailable (e.g. workflow_dispatch).
+      Defaults to the event payload's PR number.
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  commit-sha:
+    description: >-
+      Commit SHA shown in the sticky comment. Useful when the checked-out
+      ref differs from github.sha (e.g. building a pinned head SHA on
+      workflow_dispatch). Defaults to github.sha.
+    required: false
+    default: ${{ github.sha }}
 
 outputs:
   deployment-url:
@@ -93,11 +107,17 @@ runs:
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         COMMENT_TITLE: ${{ inputs.comment-title }}
         INJECT_NOINDEX: ${{ inputs.inject-noindex }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        COMMIT_SHA: ${{ inputs.commit-sha }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const { owner, repo } = context.repo;
-          const prNumber = context.payload.pull_request.number;
+          const prNumber = Number(process.env.PR_NUMBER);
+          if (!prNumber) {
+            core.info('No PR number available — skipping comment.');
+            return;
+          }
           const deployUrl = process.env.DEPLOY_URL;
           const aliasUrl = process.env.ALIAS_URL || deployUrl;
           const marker = process.env.COMMENT_MARKER;
@@ -115,7 +135,7 @@ runs:
           |---|---|
           | **Preview (stable)** | ${aliasUrl} |
           | **This commit** | ${deployUrl} |
-          | **Commit** | \`${context.sha.slice(0, 7)}\` |
+          | **Commit** | \`${process.env.COMMIT_SHA.slice(0, 7)}\` |
 
           _Includes drafts and future-dated posts.${noindexNote}_`;
 

@@ -139,6 +139,8 @@ Cloudflare API and GitHub API.
 | `comment-marker` | | `<!-- cf-pages-preview -->` | Sticky-comment identifier |
 | `comment-title` | | `Preview Deployed` | Heading in PR comment |
 | `github-token` | | `${{ github.token }}` | Token for PR commenting |
+| `pr-number` | | `${{ github.event.pull_request.number }}` | PR number to comment on — override when running on `workflow_dispatch` or other triggers without `payload.pull_request` |
+| `commit-sha` | | `${{ github.sha }}` | SHA shown in the sticky comment — override when the checked-out ref differs from `github.sha` |
 
 ### `cleanup`
 
@@ -150,6 +152,7 @@ Cloudflare API and GitHub API.
 | `branch` | | `pr-<PR number>` | CF Pages branch alias to delete |
 | `comment-marker` | | `<!-- cf-pages-preview -->` | Sticky-comment identifier |
 | `github-token` | | `${{ github.token }}` | Token for PR commenting |
+| `pr-number` | | `${{ github.event.pull_request.number }}` | PR number to update the sticky comment on — override when running on `workflow_dispatch` or other triggers without `payload.pull_request` |
 
 ## Outputs
 
