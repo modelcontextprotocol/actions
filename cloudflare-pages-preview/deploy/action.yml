@@ -36,6 +36,15 @@ inputs:
     description: Heading shown in the sticky PR comment
     required: false
     default: 'Preview Deployed'
+  comment-mode:
+    description: >-
+      How to handle prior preview comments. 'sticky' (default) updates the
+      existing marker comment in place. 'repost' minimizes all prior marker
+      comments as OUTDATED (GitHub's native hide-comment UI) and posts a fresh
+      comment at the bottom of the conversation — preserving history while
+      surfacing the latest links prominently.
+    required: false
+    default: sticky
   github-token:
     description: GitHub token for posting/updating the PR comment
     required: false
@@ -106,52 +115,12 @@ runs:
         ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         COMMENT_TITLE: ${{ inputs.comment-title }}
+        COMMENT_MODE: ${{ inputs.comment-mode }}
         INJECT_NOINDEX: ${{ inputs.inject-noindex }}
         PR_NUMBER: ${{ inputs.pr-number }}
         COMMIT_SHA: ${{ inputs.commit-sha }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const { owner, repo } = context.repo;
-          const prNumber = Number(process.env.PR_NUMBER);
-          if (!prNumber) {
-            core.info('No PR number available — skipping comment.');
-            return;
-          }
-          const deployUrl = process.env.DEPLOY_URL;
-          const aliasUrl = process.env.ALIAS_URL || deployUrl;
-          const marker = process.env.COMMENT_MARKER;
-          const title = process.env.COMMENT_TITLE;
-          const noindex = process.env.INJECT_NOINDEX === 'true';
-
-          const noindexNote = noindex
-            ? ' All pages served with `noindex, nofollow` — search engines will not crawl this preview.'
-            : '';
-
-          const body = `${marker}
-          ## ${title}
-
-          | | |
-          |---|---|
-          | **Preview (stable)** | ${aliasUrl} |
-          | **This commit** | ${deployUrl} |
-          | **Commit** | \`${process.env.COMMIT_SHA.slice(0, 7)}\` |
-
-          _Includes drafts and future-dated posts.${noindexNote}_`;
-
-          const { data: comments } = await github.rest.issues.listComments({
-            owner, repo, issue_number: prNumber
-          });
-          const existing = comments.find(c =>
-            c.user.type === 'Bot' && c.body.includes(marker)
-          );
-
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner, repo, comment_id: existing.id, body
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner, repo, issue_number: prNumber, body
-            });
-          }
+          const main = require(process.env.GITHUB_ACTION_PATH + '/comment.js');
+          await main({ github, context, core });

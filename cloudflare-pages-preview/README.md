@@ -11,7 +11,9 @@ and cleaning them up when the PR closes.
      previews aren't crawled by search engines (optional, on by default)
   2. Deploys to Cloudflare Pages under a per-PR branch alias
      (`pr-<number>` by default) giving a stable URL across force-pushes
-  3. Posts or updates a sticky PR comment with the preview URLs
+  3. Posts a PR comment with the preview URLs — either updating a sticky
+     comment in place (`comment-mode: sticky`, default) or minimizing prior
+     preview comments as OUTDATED and reposting fresh (`comment-mode: repost`)
 
 - **`cleanup`** — On PR close:
   1. Deletes all Cloudflare Pages deployments for the PR's branch alias
@@ -137,6 +139,7 @@ Cloudflare API and GitHub API.
 | `branch` | | `pr-<PR number>` | CF Pages branch alias |
 | `inject-noindex` | | `'true'` | Inject `_headers` + `<meta>` noindex |
 | `comment-marker` | | `<!-- cf-pages-preview -->` | Sticky-comment identifier |
+| `comment-mode` | | `sticky` | `sticky` updates the existing marker comment in place. `repost` minimizes all prior marker comments as **OUTDATED** (GitHub's native hide) and posts a fresh one. |
 | `comment-title` | | `Preview Deployed` | Heading in PR comment |
 | `github-token` | | `${{ github.token }}` | Token for PR commenting |
 | `pr-number` | | `${{ github.event.pull_request.number }}` | PR number to comment on — override when running on `workflow_dispatch` or other triggers without `payload.pull_request` |
@@ -151,6 +154,7 @@ Cloudflare API and GitHub API.
 | `account-id` | ✅ | — | Cloudflare account ID |
 | `branch` | | `pr-<PR number>` | CF Pages branch alias to delete |
 | `comment-marker` | | `<!-- cf-pages-preview -->` | Sticky-comment identifier |
+| `comment-mode` | | `sticky` | Must match `deploy`'s `comment-mode`. In `repost` mode, minimizes all marker comments and posts a final cleanup comment. |
 | `github-token` | | `${{ github.token }}` | Token for PR commenting |
 | `pr-number` | | `${{ github.event.pull_request.number }}` | PR number to update the sticky comment on — override when running on `workflow_dispatch` or other triggers without `payload.pull_request` |
 
