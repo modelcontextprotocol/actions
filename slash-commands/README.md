@@ -172,48 +172,18 @@ jobs:
 
       # ... your blog build steps → output to blog/public ...
 
-      # cloudflare-pages-preview/deploy cannot be used here — its comment
-      # step reads context.payload.pull_request.number, which is undefined
-      # on workflow_dispatch and will throw. Call wrangler directly:
-      - name: Inject noindex
-        run: |
-          echo -e '/*\n  X-Robots-Tag: noindex, nofollow, noarchive, nosnippet' > blog/public/_headers
-          find blog/public -name '*.html' -print0 | \
-            xargs -0 -r sed -i 's|<head>|<head><meta name="robots" content="noindex, nofollow">|'
-
-      - id: deploy
-        uses: cloudflare/wrangler-action@v3
+      - uses: modelcontextprotocol/actions/cloudflare-pages-preview/deploy@main
         with:
-          apiToken: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
-          accountId: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
-          command: pages deploy blog/public --project-name=mcp-blog-preview --branch=pr-${{ inputs.pr_number }}
-
-      - uses: actions/github-script@v8
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-          HEAD_SHA: ${{ inputs.head_sha }}
-          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
-          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
-        with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(process.env.PR_NUMBER),
-              body: `## Blog Preview (staged via /stageblog)\n\n` +
-                    `| | |\n|---|---|\n` +
-                    `| **Preview (stable)** | ${process.env.ALIAS_URL} |\n` +
-                    `| **This commit** | ${process.env.DEPLOY_URL} |\n` +
-                    `| **Commit** | \`${process.env.HEAD_SHA.slice(0,7)}\` |\n\n` +
-                    `_Includes drafts and future-dated posts. noindex headers set._`,
-            });
+          directory: blog/public
+          project-name: mcp-blog-preview
+          api-token: ${{ secrets.CF_PAGES_PREVIEW_API_TOKEN }}
+          account-id: ${{ secrets.CF_PAGES_PREVIEW_ACCOUNT_ID }}
+          branch: pr-${{ inputs.pr_number }}
+          pr-number: ${{ inputs.pr_number }}
+          commit-sha: ${{ inputs.head_sha }}
+          comment-title: "Blog Preview (staged via /stageblog)"
+          comment-marker: "<!-- stage-blog-comment -->"
 ```
-
-> **Known limitation:** `cloudflare-pages-preview/deploy` currently reads
-> `context.payload.pull_request.number` unconditionally in its comment step,
-> which throws on `workflow_dispatch`. Until the deploy action accepts an
-> explicit `pr-number` input, bypass it and call `cloudflare/wrangler-action`
-> directly as shown above. (Fixing deploy is a follow-up.)
 
 ## Inputs
 
