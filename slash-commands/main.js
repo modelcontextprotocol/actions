@@ -1,8 +1,8 @@
 // Handler for /lgtm, /hold, and /stageblog slash commands. Called by actions/github-script
-// via `require(...)({ github, context, core, orgClient })`.
+// via `require(github.action_path + '/main.js')({ github, context, core })`.
 // See action.yml for input wiring via env vars.
 
-module.exports = async ({ github, context, core, orgClient }) => {
+module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
   const approvedLabel = process.env.APPROVED_LABEL;
   const holdLabel = process.env.HOLD_LABEL;
@@ -13,10 +13,13 @@ module.exports = async ({ github, context, core, orgClient }) => {
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const reviewMarker = '<!-- slash-commands-lgtm -->';
   // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
-  // reactions, labels, and reviews show as github-actions[bot]. `orgClient`
-  // is a separate Octokit instance authed with the PAT and used ONLY for
-  // team-membership checks (read:org). It must be constructed by the caller
-  // because @actions/github is not resolvable from this file.
+  // reactions, labels, and reviews show as github-actions[bot]. The PAT is
+  // passed via env and used ONLY for the raw-fetch team-membership check
+  // below — we cannot construct a second Octokit client here because
+  // @actions/github is bundled into github-script's dist/index.js and not
+  // resolvable, nor does a per-request `headers.authorization` override work
+  // (Octokit's auth hook overwrites it).
+  const orgToken = process.env.ORG_TOKEN;
 
   function setResult(result, actor) {
     core.setOutput('result', result);
@@ -80,26 +83,34 @@ module.exports = async ({ github, context, core, orgClient }) => {
   async function isTeamMember(user, teamSlug) {
     const key = `${teamSlug}:${user}`;
     if (teamMembershipCache.has(key)) return teamMembershipCache.get(key);
-    try {
-      const { data } = await orgClient.rest.teams.getMembershipForUserInOrg({
-        org: owner, team_slug: teamSlug, username: user,
-      });
-      const ok = data.state === 'active';
-      teamMembershipCache.set(key, ok);
-      return ok;
-    } catch (e) {
-      if (e.status === 404) {
-        teamMembershipCache.set(key, false);
-        return false;
-      }
-      // 403 here almost always means the token lacks read:org.
-      if (e.status === 403) {
-        core.warning(`Team membership check for @${owner}/${teamSlug} returned 403 — the provided github-token likely lacks read:org (Organization Members:read) scope. Treating as not-a-member.`);
-        teamMembershipCache.set(key, false);
-        return false;
-      }
-      throw e;
+    const res = await fetch(
+      `https://api.github.com/orgs/${encodeURIComponent(owner)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(user)}`,
+      {
+        headers: {
+          authorization: `Bearer ${orgToken}`,
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+      },
+    );
+    if (res.status === 404) {
+      teamMembershipCache.set(key, false);
+      return false;
     }
+    if (res.status === 403) {
+      // Almost always means the token lacks read:org.
+      core.warning(`Team membership check for @${owner}/${teamSlug} returned 403 — the provided github-token likely lacks read:org (Organization Members:read) scope. Treating as not-a-member.`);
+      teamMembershipCache.set(key, false);
+      return false;
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Team membership check failed: ${res.status} ${body}`);
+    }
+    const data = await res.json();
+    const ok = data.state === 'active';
+    teamMembershipCache.set(key, ok);
+    return ok;
   }
 
   async function isAuthorized(user, pr) {
