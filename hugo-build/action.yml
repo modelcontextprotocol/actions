@@ -1,0 +1,70 @@
+name: Hugo Build
+description: >-
+  Installs Go + Hugo (extended) and builds a Hugo site. Set mode=preview to
+  include drafts and future-dated posts (development env); mode=production
+  for release builds.
+
+inputs:
+  working-directory:
+    description: Directory containing the Hugo site (with hugo.toml)
+    required: false
+    default: '.'
+  mode:
+    description: >-
+      'preview' (HUGO_ENVIRONMENT=development, --buildDrafts --buildFuture) or
+      'production' (HUGO_ENVIRONMENT=production, no drafts/future)
+    required: false
+    default: preview
+  base-url:
+    description: >-
+      Hugo --baseURL. Typically '/' for CF Pages previews (root-relative
+      paths); pass the canonical URL for production.
+    required: false
+    default: '/'
+  hugo-version:
+    description: Hugo extended version to install
+    required: false
+    default: '0.148.0'
+  go-version:
+    description: Go version for Hugo modules
+    required: false
+    default: '1.24'
+
+outputs:
+  public-dir:
+    description: Path to the built static site (working-directory + /public)
+    value: ${{ inputs.working-directory }}/public
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Install Hugo
+      shell: bash
+      env:
+        HUGO_VERSION: ${{ inputs.hugo-version }}
+      run: |
+        wget -O "${RUNNER_TEMP}/hugo.deb" \
+          "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb"
+        sudo dpkg -i "${RUNNER_TEMP}/hugo.deb"
+
+    - name: Build
+      shell: bash
+      env:
+        HUGO_CACHEDIR: ${{ runner.temp }}/hugo_cache
+        HUGO_ENVIRONMENT: ${{ inputs.mode == 'production' && 'production' || 'development' }}
+        BASE_URL: ${{ inputs.base-url }}
+        WORKDIR: ${{ inputs.working-directory }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        cd "${WORKDIR}"
+        args=(--gc --minify --baseURL "${BASE_URL}")
+        if [ "${MODE}" = "preview" ]; then
+          args+=(--buildDrafts --buildFuture)
+        fi
+        hugo "${args[@]}"
