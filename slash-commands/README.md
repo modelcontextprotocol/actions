@@ -1,0 +1,181 @@
+# slash-commands
+
+Reusable composite action that implements Prow-style `/lgtm` and `/hold` slash
+commands on pull requests, gated by team membership and CODEOWNERS.
+
+## What it does
+
+Listens for PR comments and push events, then:
+
+- **`/lgtm`** — if the commenter is a core maintainer _or_ a CODEOWNER of the
+  PR's changed files, adds an `approved` label and submits a bot **APPROVE**
+  review with body "Approved on behalf of @user via `/lgtm`."
+- **`/lgtm cancel`** — removes the `approved` label and dismisses the bot
+  review.
+- **`/hold`** — adds a `do-not-merge/hold` label (same authorization rule).
+- **`/hold cancel`** or **`/unhold`** — removes the hold label.
+- **New commits pushed** — removes the `approved` label, dismisses the bot
+  review, and posts a brief comment asking for re-approval.
+
+Commands are parsed from the **first line** of the comment (case-insensitive,
+must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
+their own PR, receive a 👎 reaction with no further noise. Successful commands
+receive a 👍 reaction.
+
+The caller workflow adds a separate `status` job that reports a required check
+which passes only when `approved` is present and `do-not-merge/hold` is absent
+— making the labels an actual merge gate via branch protection.
+
+## Prerequisites
+
+- The `approved` and `do-not-merge/hold` labels **must already exist** in the
+  caller repo (the action does not auto-create them). Suggested colors:
+  `approved` → `#0e8a16`, `do-not-merge/hold` → `#d93f0b`.
+- A CODEOWNERS file at `.github/CODEOWNERS` (or pass a different path via
+  `codeowners-path`). Without one, only `always-allow-teams` members can act.
+
+## Required secrets
+
+Create this secret in the caller repo: GitHub → repo → **Settings → Secrets
+and variables → Actions → New repository secret**.
+
+| Repo secret name | Action input | Value |
+|---|---|---|
+| `SLASH_COMMANDS_TOKEN` | `github-token` | Fine-grained PAT (or GitHub App installation token) with **Organization → Members: read** plus **Repository → Contents: read, Pull requests: write, Issues: write** |
+
+> **The default `${{ github.token }}` will NOT work.** Team-membership checks
+> (`GET /orgs/{org}/teams/{team}/memberships/{user}`) require `read:org` scope,
+> which the automatic `GITHUB_TOKEN` never has — even with a `permissions:`
+> block. You _must_ provide a PAT or App token.
+
+### `SLASH_COMMANDS_TOKEN`
+
+**Option A — fine-grained PAT (recommended for single-repo setups):**
+
+GitHub → **Settings → Developer settings → Personal access tokens → Fine-grained
+tokens → Generate new token**. Configure:
+
+| Section | Setting |
+|---|---|
+| Resource owner | `modelcontextprotocol` (or your org) |
+| Repository access | **Only select repositories** → pick the caller repo |
+| Repository permissions → Contents | Read-only |
+| Repository permissions → Pull requests | Read and write |
+| Repository permissions → Issues | Read and write |
+| Organization permissions → Members | Read-only |
+
+Do not grant any write permissions beyond Pull requests + Issues. **Contents**
+must remain read-only — the action never writes code.
+
+**Option B — GitHub App installation token:**
+
+If your org already uses a bot App, generate an installation token with the
+same scopes and store it as `SLASH_COMMANDS_TOKEN`. The App must be installed
+on the caller repo _and_ have org-level **Members: read**.
+
+## Caller workflow requirements
+
+| | |
+|---|---|
+| **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`, `opened`, `reopened`, `labeled`, `unlabeled`) |
+| **Permissions** | `pull-requests: write`, `issues: write`, `contents: read` |
+| **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
+| **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
+
+## Usage
+
+```yaml
+name: Slash Commands
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [synchronize, opened, reopened, labeled, unlabeled]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  handle:
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'synchronize')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: modelcontextprotocol/actions/slash-commands@main
+        with:
+          github-token: ${{ secrets.SLASH_COMMANDS_TOKEN }}
+          always-allow-teams: core-maintainers,lead-maintainers
+
+  # Merge-gate status check — make this a required check in branch protection.
+  status:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require approval, block on hold
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          echo "Labels: $LABELS"
+          if ! jq -e 'contains(["approved"])' <<<"$LABELS" > /dev/null; then
+            echo "::error::Missing 'approved' label — comment /lgtm"
+            exit 1
+          fi
+          if jq -e 'contains(["do-not-merge/hold"])' <<<"$LABELS" > /dev/null; then
+            echo "::error::'do-not-merge/hold' present — resolve, then /unhold"
+            exit 1
+          fi
+          echo "approved and not held"
+```
+
+## Inputs
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `github-token` | ✅ | — | PAT or App token with `read:org` + repo `pull-requests: write` + `issues: write` + `contents: read`. **Default `GITHUB_TOKEN` will not work** for team checks. |
+| `approved-label` | | `approved` | Label added by `/lgtm` |
+| `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
+| `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` or `/hold` any PR regardless of CODEOWNERS |
+| `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof) |
+| `invalidate-on-push` | | `'true'` | Remove `approved` label + dismiss bot review + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
+| `submit-review` | | `'true'` | Submit a bot APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
+
+## Outputs
+
+| Output | Description |
+|---|---|
+| `result` | One of: `lgtm-added`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `self-lgtm-blocked`, `noop` |
+| `actor` | Login of the commenter (empty for non-comment triggers) |
+
+## CODEOWNERS pattern support
+
+The inline CODEOWNERS parser handles the patterns currently used in MCP repos:
+
+| Pattern | Supported | Meaning |
+|---|---|---|
+| `/path/` | ✅ | Anchored directory prefix (matches anything under `path/`) |
+| `/path/to/file.ext` | ✅ | Exact anchored path |
+| `*.ext` | ✅ | Any file with extension `.ext` at any depth |
+| `/path/**/*.ext` | ✅ | Glob at any depth under `/path/` |
+| `**/file` | ✅ | File named `file` at any depth |
+| `@user` / `@org/team` | ✅ | Owner: individual user or team (team org must match repo org) |
+| `!negation` | ❌ | Not supported (not in use in MCP repos) |
+| Escaped spaces (`\ `) | ❌ | Not supported |
+
+Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
+
+## Security notes
+
+- **Comment body injection** — command parsing is a fixed regex on the
+  first line in JS; comment text is never interpolated into a shell.
+- **CODEOWNERS tampering** — fetched from `pr.base.ref`, never the PR head.
+  An attacker cannot add themselves as CODEOWNER in the PR under review.
+- **Workflow modification** — `issue_comment` and `pull_request_target` run
+  from the default-branch workflow definition. The action does not check out
+  PR code.
+- **Self-approval** — explicitly blocked before the auth check.
+- **Review provenance** — the bot review body always names the real approver
+  ("on behalf of @login"), even though GitHub shows the review as bot-authored.
