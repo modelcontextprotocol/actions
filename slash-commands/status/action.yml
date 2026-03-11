@@ -1,0 +1,77 @@
+name: PR Slash Commands — Merge-Gate Status
+description: >-
+  Sets a commit status on the PR head SHA based on approval/hold labels.
+  Stays `pending` until the approved label is present, goes `failure` when the
+  hold label is present, and `success` when approved-and-not-held. Use this
+  instead of an exit-code-based status job so PRs show a yellow pending check
+  (not a red failure) while awaiting /lgtm.
+
+inputs:
+  github-token:
+    description: >-
+      Token for the commit-status API call. The caller workflow must grant
+      this token `statuses: write`.
+    required: false
+    default: ${{ github.token }}
+  approved-label:
+    description: Label that marks the PR as approved (set by /lgtm)
+    required: false
+    default: approved
+  hold-label:
+    description: Label that blocks merging (set by /hold)
+    required: false
+    default: do-not-merge/hold
+  status-context:
+    description: >-
+      The commit-status context name. This is what appears in the PR merge box
+      and what you mark as a required status check in branch protection.
+    required: false
+    default: slash-commands/approval
+
+outputs:
+  state:
+    description: The commit status state that was set (pending, success, failure)
+    value: ${{ steps.set.outputs.state }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set commit status
+      id: set
+      uses: actions/github-script@v8
+      env:
+        APPROVED_LABEL: ${{ inputs.approved-label }}
+        HOLD_LABEL: ${{ inputs.hold-label }}
+        STATUS_CONTEXT: ${{ inputs.status-context }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { owner, repo } = context.repo;
+          const pr = context.payload.pull_request;
+          if (!pr) {
+            core.setFailed('slash-commands/status must run on a pull_request(_target) event');
+            return;
+          }
+          const sha = pr.head.sha;
+          const labels = pr.labels.map(l => l.name);
+          const approvedLabel = process.env.APPROVED_LABEL;
+          const holdLabel = process.env.HOLD_LABEL;
+          const statusContext = process.env.STATUS_CONTEXT;
+
+          let state, description;
+          if (labels.includes(holdLabel)) {
+            state = 'failure';
+            description = `Blocked by ${holdLabel} — comment /unhold to clear`;
+          } else if (labels.includes(approvedLabel)) {
+            state = 'success';
+            description = `Approved via /lgtm`;
+          } else {
+            state = 'pending';
+            description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
+          }
+
+          await github.rest.repos.createCommitStatus({
+            owner, repo, sha, state, description, context: statusContext,
+          });
+          core.setOutput('state', state);
+          core.info(`Set status ${state} on ${sha.slice(0,7)}: ${description}`);
