@@ -1,10 +1,10 @@
 name: PR Slash Commands — Merge-Gate Status
 description: >-
-  Sets a commit status on the PR head SHA based on approval/hold labels.
-  Stays `pending` until the approved label is present, goes `failure` when the
-  hold label is present, and `success` when approved-and-not-held. Use this
-  instead of an exit-code-based status job so PRs show a yellow pending check
-  (not a red failure) while awaiting /lgtm.
+  Sets the initial pending commit status on the PR head SHA at open time and
+  forces it back to pending on push (new SHA, approval invalidated). Never
+  sets success — only the main slash-commands action's auth-gated /lgtm
+  handler may do that, so a manually-added approved label cannot bypass the
+  merge gate. Sets failure if the hold label is present.
 
 inputs:
   github-token:
@@ -13,10 +13,6 @@ inputs:
       this token `statuses: write`.
     required: false
     default: ${{ github.token }}
-  approved-label:
-    description: Label that marks the PR as approved (set by /lgtm)
-    required: false
-    default: approved
   hold-label:
     description: Label that blocks merging (set by /hold)
     required: false
@@ -30,17 +26,14 @@ inputs:
   invalidate-on-push:
     description: >-
       When 'true', a push (synchronize event) forces the status to pending
-      regardless of labels. This must match the main slash-commands action's
-      invalidate-on-push setting. Without this, on a push the event payload
-      still contains the pre-push label state, so this action would set
-      success on the new SHA (racing with the handle job removing the label)
-      and auto-merge can slip through.
+      regardless of labels. Must match the main slash-commands action's
+      invalidate-on-push setting.
     required: false
     default: 'true'
 
 outputs:
   state:
-    description: The commit status state that was set (pending, success, failure)
+    description: The commit status state that was set (pending or failure)
     value: ${{ steps.set.outputs.state }}
 
 runs:
@@ -50,7 +43,6 @@ runs:
       id: set
       uses: actions/github-script@v8
       env:
-        APPROVED_LABEL: ${{ inputs.approved-label }}
         HOLD_LABEL: ${{ inputs.hold-label }}
         STATUS_CONTEXT: ${{ inputs.status-context }}
         INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
@@ -64,32 +56,25 @@ runs:
             return;
           }
           const sha = pr.head.sha;
-          const approvedLabel = process.env.APPROVED_LABEL;
           const holdLabel = process.env.HOLD_LABEL;
           const statusContext = process.env.STATUS_CONTEXT;
           const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
 
-          // On push, the event payload's labels reflect the PRE-push state.
-          // If invalidation is on, the handle job is about to (or already did)
-          // remove the approved label in parallel — but we can't see that here.
-          // Force pending so auto-merge can't slip through on a stale success.
-          // The subsequent unlabeled event will re-evaluate (and stay pending).
+          // Never set success here. The only success writer is the main
+          // action's /lgtm handler, which is auth-gated. Reading the approved
+          // label would let anyone with triage+ perms bypass auth by labeling
+          // manually. This sub-action's job is: pending on open, pending on
+          // push (new SHA needs fresh approval), failure on hold.
           let state, description;
           if (invalidateOnPush && context.payload.action === 'synchronize') {
             state = 'pending';
             description = `New commits pushed — awaiting re-approval via /lgtm`;
+          } else if (pr.labels.some(l => l.name === holdLabel)) {
+            state = 'failure';
+            description = `Blocked by ${holdLabel} — comment /unhold to clear`;
           } else {
-            const labels = pr.labels.map(l => l.name);
-            if (labels.includes(holdLabel)) {
-              state = 'failure';
-              description = `Blocked by ${holdLabel} — comment /unhold to clear`;
-            } else if (labels.includes(approvedLabel)) {
-              state = 'success';
-              description = `Approved via /lgtm`;
-            } else {
-              state = 'pending';
-              description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
-            }
+            state = 'pending';
+            description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
           }
 
           await github.rest.repos.createCommitStatus({

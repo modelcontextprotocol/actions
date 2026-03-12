@@ -11,6 +11,7 @@ module.exports = async ({ github, context, core }) => {
   const codeownersPath = process.env.CODEOWNERS_PATH;
   const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
+  const statusContext = process.env.STATUS_CONTEXT;
   const reviewMarker = '<!-- slash-commands-lgtm -->';
   // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
   // reactions, labels, and reviews show as github-actions[bot]. The PAT is
@@ -207,6 +208,28 @@ module.exports = async ({ github, context, core }) => {
       }
     }
   }
+  // GITHUB_TOKEN-triggered label events do NOT create workflow runs, so the
+  // status sub-action cannot react to our addLabel/removeLabel calls. Set the
+  // commit status directly here. This is also the ONLY path that may set
+  // state=success — the status sub-action deliberately never does, so that a
+  // manually-added approved label (triage+ perms suffice) cannot bypass auth.
+  async function setCommitStatus(sha, approved, held) {
+    let state, description;
+    if (held) {
+      state = 'failure';
+      description = `Blocked by ${holdLabel} — comment /unhold to clear`;
+    } else if (approved) {
+      state = 'success';
+      description = `Approved via /lgtm`;
+    } else {
+      state = 'pending';
+      description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
+    }
+    await github.rest.repos.createCommitStatus({
+      owner, repo, sha, state, description, context: statusContext,
+    });
+    core.info(`Set commit status ${state} on ${sha.slice(0,7)}: ${description}`);
+  }
 
   // --- Dispatch ---------------------------------------------------
   const ev = context.eventName;
@@ -243,6 +266,10 @@ module.exports = async ({ github, context, core }) => {
   const prNumber = context.payload.issue.number;
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
   if (pr.state !== 'open') return setResult('noop', actor);
+
+  const preLabels = new Set(pr.labels.map(l => l.name));
+  const hadApproved = preLabels.has(approvedLabel);
+  const hadHold = preLabels.has(holdLabel);
 
   // Self-approval guard (only for /lgtm, not /hold)
   if (cmd === 'lgtm' && !cancel && actor.toLowerCase() === pr.user.login.toLowerCase()) {
@@ -305,21 +332,25 @@ module.exports = async ({ github, context, core }) => {
     await addLabel(prNumber, approvedLabel);
     if (submitReview) await submitApproval(prNumber, actor);
     await react(commentId, '+1');
+    await setCommitStatus(pr.head.sha, true, hadHold);
     return setResult('lgtm-added', actor);
   }
   if (cmd === 'lgtm' && cancel) {
     await removeLabel(prNumber, approvedLabel);
     await dismissBotApprovals(prNumber, `@${actor} cancelled approval via /lgtm cancel.`);
     await react(commentId, '+1');
+    await setCommitStatus(pr.head.sha, false, hadHold);
     return setResult('lgtm-removed', actor);
   }
   if ((cmd === 'hold' && !cancel)) {
     await addLabel(prNumber, holdLabel);
     await react(commentId, '+1');
+    await setCommitStatus(pr.head.sha, hadApproved, true);
     return setResult('hold-added', actor);
   }
   // /hold cancel or /unhold
   await removeLabel(prNumber, holdLabel);
   await react(commentId, '+1');
+  await setCommitStatus(pr.head.sha, hadApproved, false);
   return setResult('hold-removed', actor);
 };
