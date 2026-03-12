@@ -54,6 +54,13 @@ inputs:
       Set to 'false' to rely on the label alone.
     required: false
     default: 'true'
+  status-context:
+    description: >-
+      Commit-status context name written after each label mutation. Must match
+      the status sub-action's status-context so both jobs write to the same
+      check. Mark this context as a required status check in branch protection.
+    required: false
+    default: slash-commands/approval
   stageblog-workflow:
     description: >-
       Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
@@ -93,6 +100,7 @@ runs:
         CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
         INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
+        STATUS_CONTEXT: ${{ inputs.status-context }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
         ORG_TOKEN: ${{ inputs.github-token }}

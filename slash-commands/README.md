@@ -29,10 +29,13 @@ must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
 their own PR, receive a 👎 reaction with no further noise. Successful commands
 receive a 👍 reaction.
 
-The caller workflow pairs this with the `slash-commands/status` sub-action,
-which sets a commit status that stays **pending** until `approved` is present
-and goes **failure** when `do-not-merge/hold` is present — making the labels
-an actual merge gate via branch protection without a red ❌ on every fresh PR.
+The action writes a commit status (`slash-commands/approval` by default) after
+each label mutation — this is the merge gate. Mark it as a required status
+check in branch protection. The commit status can **only** be set to `success`
+by an authorized `/lgtm`; manually adding the `approved` label through the
+GitHub UI has no effect on the gate. The caller workflow pairs this with the
+`slash-commands/status` sub-action, which sets the status to `pending` on open
+and on every push (fresh SHA = fresh approval needed).
 
 ## Prerequisites
 
@@ -87,7 +90,7 @@ on the caller repo _and_ have org-level **Members: read**.
 
 | | |
 |---|---|
-| **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`, `opened`, `reopened`, `labeled`, `unlabeled`) |
+| **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `opened`, `synchronize`) |
 | **Permissions** | `pull-requests: write`, `issues: write`, `contents: read`, `statuses: write`. If `/stageblog` is enabled, also `actions: write`. |
 | **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
 | **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
@@ -101,7 +104,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [synchronize, opened, reopened, labeled, unlabeled]
+    types: [opened, synchronize]
 
 permissions:
   pull-requests: write
@@ -189,6 +192,7 @@ jobs:
 | `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof) |
 | `invalidate-on-push` | | `'true'` | Remove `approved` label + dismiss bot review + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
 | `submit-review` | | `'true'` | Submit a bot APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
+| `status-context` | | `slash-commands/approval` | Commit-status context written after each label mutation. Must match the `status` sub-action's `status-context`. Mark this as a required status check in branch protection. |
 | `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
 | `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
 
@@ -201,10 +205,16 @@ jobs:
 
 ## `slash-commands/status` sub-action
 
-Sets a commit status on the PR head SHA derived from the approval/hold labels.
-Use in a `status` job that runs on every `pull_request_target` event. The job
-itself always succeeds — the commit status it creates is what branch protection
-enforces. Make the `status-context` value a required status check.
+Sets the **initial** `pending` commit status when a PR opens, and forces it
+back to `pending` on every push (new SHA = new approval required). Run in a
+`status` job on `pull_request_target` events. Mark the `status-context` value
+as a required status check in branch protection.
+
+This sub-action **never sets `success`** — that would let anyone with `triage`
+permissions bypass the auth gate by adding the `approved` label manually.
+Only the main action's `/lgtm` handler (which runs the team/CODEOWNERS check)
+writes `success`. The sub-action also cannot react to the main action's label
+writes: `GITHUB_TOKEN`-triggered events do not create workflow runs.
 
 **States:**
 
@@ -212,29 +222,22 @@ enforces. Make the `status-context` value a required status check.
 |---|---|---|
 | `synchronize` event + `invalidate-on-push: true` | `pending` (🟡) | New commits — re-approve |
 | `do-not-merge/hold` present | `failure` (❌) | Blocked by hold |
-| `approved` present, no hold | `success` (✅) | Approved via /lgtm |
 | otherwise | `pending` (🟡) | Awaiting /lgtm |
-
-The `synchronize` special-case is a race guard: the event payload's labels
-reflect the *pre-push* state, so without it this action would read a stale
-`approved` and set `success` on the new SHA while the `handle` job is still
-removing the label in parallel — letting auto-merge slip through.
 
 **Inputs:**
 
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `github-token` | | `${{ github.token }}` | Token for the commit-status API. Workflow needs `statuses: write`. |
-| `approved-label` | | `approved` | Must match the main action's `approved-label` |
 | `hold-label` | | `do-not-merge/hold` | Must match the main action's `hold-label` |
-| `status-context` | | `slash-commands/approval` | Name shown in the merge box. Mark this as a required status check. |
-| `invalidate-on-push` | | `'true'` | On `synchronize`, force pending regardless of labels. **Must match** the main action's `invalidate-on-push`. Disabling this opens an auto-merge race. |
+| `status-context` | | `slash-commands/approval` | Name shown in the merge box. **Must match** the main action's `status-context`. Mark this as a required status check. |
+| `invalidate-on-push` | | `'true'` | On `synchronize`, force pending regardless of labels. **Must match** the main action's `invalidate-on-push`. |
 
 **Outputs:**
 
 | Output | Description |
 |---|---|
-| `state` | The commit status state set: `pending`, `success`, or `failure` |
+| `state` | The commit status state set: `pending` or `failure` |
 
 ## CODEOWNERS pattern support
 
@@ -263,6 +266,11 @@ Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
   from the default-branch workflow definition. The action does not check out
   PR code.
 - **Self-approval** — explicitly blocked before the auth check.
+- **Manual label bypass** — the commit status (the actual merge gate) is only
+  ever set to `success` by the `/lgtm` handler after the auth check passes.
+  The `status` sub-action sets `pending`/`failure` but never `success`, and the
+  caller workflow does not trigger on `labeled` events. Adding the `approved`
+  label via the GitHub UI is cosmetic.
 - **`/stageblog` SHA pinning** — the dispatch passes `pr.head.sha` captured at
   the moment the maintainer comments. The companion workflow **must** check
   out `inputs.head_sha` (not `refs/pull/N/head` or `pr.head.ref`) so a fork
