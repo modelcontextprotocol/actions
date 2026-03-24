@@ -38,6 +38,13 @@ inputs:
       /lgtm or /hold any PR regardless of CODEOWNERS
     required: false
     default: core-maintainers
+  force-allow-teams:
+    description: >-
+      Comma-separated team slugs (within the repo's org) whose members may
+      use /lgtm force. This bypasses the self-approval guard and CODEOWNERS —
+      only membership in one of these teams grants it.
+    required: false
+    default: core-maintainers,lead-maintainers
   codeowners-path:
     description: Path to the CODEOWNERS file (fetched from the PR base branch)
     required: false
@@ -79,9 +86,9 @@ inputs:
 outputs:
   result:
     description: >-
-      One of: lgtm-added, lgtm-removed, hold-added, hold-removed, invalidated,
-      unauthorized, self-lgtm-blocked, stageblog-dispatched, stageblog-not-blog,
-      stageblog-disabled, noop
+      One of: lgtm-added, lgtm-forced, lgtm-removed, hold-added, hold-removed,
+      invalidated, unauthorized, force-unauthorized, self-lgtm-blocked,
+      stageblog-dispatched, stageblog-not-blog, stageblog-disabled, noop
     value: ${{ steps.handle.outputs.result }}
   actor:
     description: Login of the user who triggered the action (commenter)
@@ -97,6 +104,7 @@ runs:
         APPROVED_LABEL: ${{ inputs.approved-label }}
         HOLD_LABEL: ${{ inputs.hold-label }}
         ALWAYS_ALLOW_TEAMS: ${{ inputs.always-allow-teams }}
+        FORCE_ALLOW_TEAMS: ${{ inputs.force-allow-teams }}
         CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
         INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
         SUBMIT_REVIEW: ${{ inputs.submit-review }}

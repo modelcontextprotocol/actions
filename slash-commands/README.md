@@ -13,6 +13,11 @@ Listens for PR comments and push events, then:
   review with body "Approved on behalf of @user via `/lgtm`."
 - **`/lgtm cancel`** — removes the `approved` label and dismisses the bot
   review.
+- **`/lgtm force`** — same as `/lgtm`, but **only** members of
+  `force-allow-teams` (default: core + lead maintainers) may use it, and it
+  **bypasses the self-approval guard**. Intended as an escape hatch for
+  maintainers who need to approve their own PRs. The bot review body notes
+  the approval came via `/lgtm force`.
 - **`/hold`** — adds a `do-not-merge/hold` label (same authorization rule).
 - **`/hold cancel`** or **`/unhold`** — removes the hold label.
 - **`/stageblog`** — if the PR touches any blog paths (default `blog/**`),
@@ -189,6 +194,7 @@ jobs:
 | `approved-label` | | `approved` | Label added by `/lgtm` |
 | `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
 | `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` or `/hold` any PR regardless of CODEOWNERS |
+| `force-allow-teams` | | `core-maintainers,lead-maintainers` | Comma-separated team slugs whose members may use `/lgtm force` (bypasses self-approval guard). CODEOWNERS does **not** grant this — only team membership. |
 | `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof) |
 | `invalidate-on-push` | | `'true'` | Remove `approved` label + dismiss bot review + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
 | `submit-review` | | `'true'` | Submit a bot APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
@@ -200,7 +206,7 @@ jobs:
 
 | Output | Description |
 |---|---|
-| `result` | One of: `lgtm-added`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
+| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## `slash-commands/status` sub-action
@@ -265,7 +271,10 @@ Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
 - **Workflow modification** — `issue_comment` and `pull_request_target` run
   from the default-branch workflow definition. The action does not check out
   PR code.
-- **Self-approval** — explicitly blocked before the auth check.
+- **Self-approval** — explicitly blocked before the auth check. The
+  `/lgtm force` escape hatch bypasses this, but is gated strictly to
+  `force-allow-teams` membership (CODEOWNERS does not grant it) and the
+  review body records that `force` was used.
 - **Manual label bypass** — the commit status (the actual merge gate) is only
   ever set to `success` by the `/lgtm` handler after the auth check passes.
   The `status` sub-action sets `pending`/`failure` but never `success`, and the

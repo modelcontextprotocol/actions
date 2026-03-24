@@ -8,6 +8,8 @@ module.exports = async ({ github, context, core }) => {
   const holdLabel = process.env.HOLD_LABEL;
   const alwaysAllowTeams = process.env.ALWAYS_ALLOW_TEAMS
     .split(',').map(s => s.trim()).filter(Boolean);
+  const forceAllowTeams = process.env.FORCE_ALLOW_TEAMS
+    .split(',').map(s => s.trim()).filter(Boolean);
   const codeownersPath = process.env.CODEOWNERS_PATH;
   const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
@@ -185,10 +187,11 @@ module.exports = async ({ github, context, core }) => {
       owner, repo, comment_id: commentId, content,
     });
   }
-  async function submitApproval(prNumber, onBehalfOf) {
+  async function submitApproval(prNumber, onBehalfOf, forced) {
+    const via = forced ? '/lgtm force' : '/lgtm';
     await github.rest.pulls.createReview({
       owner, repo, pull_number: prNumber, event: 'APPROVE',
-      body: `${reviewMarker}\nApproved on behalf of @${onBehalfOf} via \`/lgtm\`.`,
+      body: `${reviewMarker}\nApproved on behalf of @${onBehalfOf} via \`${via}\`.`,
     });
   }
   async function dismissBotApprovals(prNumber, reason) {
@@ -257,11 +260,16 @@ module.exports = async ({ github, context, core }) => {
   const commentId = context.payload.comment.id;
   const actor = context.payload.comment.user.login;
   const firstLine = commentBody.split('\n')[0].trim();
-  const m = firstLine.match(/^\/(lgtm|hold|unhold|stageblog)\b\s*(cancel)?\s*$/i);
+  const m = firstLine.match(/^\/(lgtm|hold|unhold|stageblog)\b\s*(cancel|force)?\s*$/i);
   if (!m) return setResult('noop', actor);
 
   const cmd = m[1].toLowerCase();
-  const cancel = !!m[2] || cmd === 'unhold';
+  const arg = (m[2] || '').toLowerCase();
+  const cancel = arg === 'cancel' || cmd === 'unhold';
+  // `force` is only meaningful for /lgtm — reject `/hold force` etc. as noop
+  // rather than silently treating it as the base command.
+  if (arg === 'force' && cmd !== 'lgtm') return setResult('noop', actor);
+  const force = arg === 'force';
 
   const prNumber = context.payload.issue.number;
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
@@ -270,6 +278,24 @@ module.exports = async ({ github, context, core }) => {
   const preLabels = new Set(pr.labels.map(l => l.name));
   const hadApproved = preLabels.has(approvedLabel);
   const hadHold = preLabels.has(holdLabel);
+
+  // /lgtm force — restricted to force-allow-teams. Bypasses the self-approval
+  // guard and the CODEOWNERS path entirely; only team membership grants this.
+  if (cmd === 'lgtm' && force) {
+    let allowed = false;
+    for (const team of forceAllowTeams) {
+      if (await isTeamMember(actor, team)) { allowed = true; break; }
+    }
+    if (!allowed) {
+      await react(commentId, '-1');
+      return setResult('force-unauthorized', actor);
+    }
+    await addLabel(prNumber, approvedLabel);
+    if (submitReview) await submitApproval(prNumber, actor, true);
+    await react(commentId, '+1');
+    await setCommitStatus(pr.head.sha, true, hadHold);
+    return setResult('lgtm-forced', actor);
+  }
 
   // Self-approval guard (only for /lgtm, not /hold)
   if (cmd === 'lgtm' && !cancel && actor.toLowerCase() === pr.user.login.toLowerCase()) {
