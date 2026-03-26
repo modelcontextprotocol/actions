@@ -196,8 +196,8 @@ jobs:
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `github-token` | ✅ | — | PAT or App token with `read:org` + repo `contents: read` (+ `actions: write` for `/stageblog`). Used for team membership checks, CODEOWNERS fetch, and workflow dispatch. **Default `GITHUB_TOKEN` will not work** for team checks. |
-| `bot-token` | | `${{ github.token }}` | Token for user-visible side effects (comments, reactions, labels, reviews) — defaults to `GITHUB_TOKEN` so these show as `github-actions[bot]`. Rarely needs overriding. |
+| `github-token` | ✅ | — | PAT or App token with `read:org` (Organization Members: read). Used **only** for the team-membership check. **Default `GITHUB_TOKEN` will not work** — it lacks `read:org`. |
+| `bot-token` | | `${{ github.token }}` | Token for all repo API calls: comments, reactions, labels, reviews, CODEOWNERS fetch, file listing, workflow dispatch, auto-merge. Defaults to `GITHUB_TOKEN` so user-visible actions show as `github-actions[bot]`. The caller workflow must grant it the needed permissions. |
 | `approved-label` | | `accepted` | Label added by `/lgtm` to mark the PR as accepted |
 | `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
 | `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` any PR. **Only these teams can `/lgtm`** — CODEOWNERS does not grant it. Members may also `/hold`/`/stageblog` any PR. |
