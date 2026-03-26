@@ -1,10 +1,10 @@
 name: PR Slash Commands
 description: >-
-  Handles /lgtm, /hold, and /stageblog slash commands on PRs. Authorized
-  users (core maintainers or CODEOWNERS of the PR's changed files) can approve
-  via /lgtm (adds a label + bot APPROVE review), block via /hold, or trigger
-  a blog preview staging workflow via /stageblog. Approval is invalidated when
-  new commits are pushed.
+  Handles /lgtm, /hold, and /stageblog slash commands on PRs. Core maintainers
+  can approve via /lgtm (adds an accepted label, submits a bot APPROVE review,
+  and enables auto-merge). Core maintainers or CODEOWNERS can block via /hold
+  or trigger a blog preview staging workflow via /stageblog. Approval is
+  invalidated when new commits are pushed.
 
 inputs:
   github-token:
@@ -25,9 +25,9 @@ inputs:
     required: false
     default: ${{ github.token }}
   approved-label:
-    description: Label added by /lgtm and used by the status job as the merge gate
+    description: Label added by /lgtm to mark the PR as accepted
     required: false
-    default: approved
+    default: accepted
   hold-label:
     description: Label added by /hold to block merging
     required: false
@@ -35,7 +35,8 @@ inputs:
   always-allow-teams:
     description: >-
       Comma-separated team slugs (within the repo's org) whose members may
-      /lgtm or /hold any PR regardless of CODEOWNERS
+      /lgtm any PR. Only these teams can /lgtm — CODEOWNERS does not grant
+      /lgtm authorization. Members may also /hold and /stageblog any PR.
     required: false
     default: core-maintainers
   force-allow-teams:
@@ -61,13 +62,18 @@ inputs:
       Set to 'false' to rely on the label alone.
     required: false
     default: 'true'
-  status-context:
+  enable-auto-merge:
     description: >-
-      Commit-status context name written after each label mutation. Must match
-      the status sub-action's status-context so both jobs write to the same
-      check. Mark this context as a required status check in branch protection.
+      Enable auto-merge on the PR after a successful /lgtm. The PR will merge
+      automatically once all required checks pass. Requires the repo to have
+      "Allow auto-merge" enabled in Settings. Disabled on /lgtm cancel and on
+      push invalidation.
     required: false
-    default: slash-commands/approval
+    default: 'true'
+  auto-merge-method:
+    description: Merge method for auto-merge — one of squash, merge, rebase
+    required: false
+    default: squash
   stageblog-workflow:
     description: >-
       Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
@@ -108,7 +114,8 @@ runs:
         CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
         INVALIDATE_ON_PUSH: ${{ inputs.invalidate-on-push }}
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
-        STATUS_CONTEXT: ${{ inputs.status-context }}
+        ENABLE_AUTO_MERGE: ${{ inputs.enable-auto-merge }}
+        AUTO_MERGE_METHOD: ${{ inputs.auto-merge-method }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
         ORG_TOKEN: ${{ inputs.github-token }}
