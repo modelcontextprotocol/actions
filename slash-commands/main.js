@@ -14,6 +14,8 @@ module.exports = async ({ github, context, core }) => {
   const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const statusContext = process.env.STATUS_CONTEXT;
+  const autoMerge = process.env.ENABLE_AUTO_MERGE === 'true';
+  const autoMergeMethod = process.env.AUTO_MERGE_METHOD.toUpperCase();
   const reviewMarker = '<!-- slash-commands-lgtm -->';
   // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
   // reactions, labels, and reviews show as github-actions[bot]. The PAT is
@@ -116,14 +118,19 @@ module.exports = async ({ github, context, core }) => {
     return ok;
   }
 
-  async function isAuthorized(user, pr) {
-    // 1. always-allow teams
+  async function isInAlwaysAllowTeam(user) {
     for (const team of alwaysAllowTeams) {
       if (await isTeamMember(user, team)) {
         core.info(`@${user} authorized via always-allow team @${owner}/${team}`);
         return true;
       }
     }
+    return false;
+  }
+
+  async function isAuthorized(user, pr) {
+    // 1. always-allow teams
+    if (await isInAlwaysAllowTeam(user)) return true;
     // 2. CODEOWNERS of the PR's changed files (from BASE ref)
     let content;
     try {
@@ -217,6 +224,7 @@ module.exports = async ({ github, context, core }) => {
   // state=success — the status sub-action deliberately never does, so that a
   // manually-added approved label (triage+ perms suffice) cannot bypass auth.
   async function setCommitStatus(sha, approved, held) {
+    if (!statusContext) return;
     let state, description;
     if (held) {
       state = 'failure';
@@ -233,6 +241,49 @@ module.exports = async ({ github, context, core }) => {
     });
     core.info(`Set commit status ${state} on ${sha.slice(0,7)}: ${description}`);
   }
+  async function enableAutoMerge(prNodeId, prNumber) {
+    if (!autoMerge) return;
+    try {
+      await github.graphql(
+        `mutation($id: ID!, $m: PullRequestMergeMethod!) {
+          enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $m}) {
+            pullRequest { autoMergeRequest { enabledAt } }
+          }
+        }`,
+        { id: prNodeId, m: autoMergeMethod },
+      );
+      core.info(`Auto-merge enabled (${autoMergeMethod})`);
+    } catch (e) {
+      const msg = e.message || String(e);
+      // enablePullRequestAutoMerge rejects PRs that are already mergeable
+      // ("clean status") because there is nothing to wait for. Merge directly.
+      if (/clean status/i.test(msg)) {
+        core.info('PR already mergeable — merging directly');
+        await github.rest.pulls.merge({
+          owner, repo, pull_number: prNumber,
+          merge_method: autoMergeMethod.toLowerCase(),
+        });
+      } else {
+        core.warning(`Could not enable auto-merge: ${msg}`);
+      }
+    }
+  }
+  async function disableAutoMerge(prNodeId) {
+    if (!autoMerge) return;
+    try {
+      await github.graphql(
+        `mutation($id: ID!) {
+          disablePullRequestAutoMerge(input: {pullRequestId: $id}) {
+            pullRequest { id }
+          }
+        }`,
+        { id: prNodeId },
+      );
+      core.info('Auto-merge disabled');
+    } catch (e) {
+      core.info(`Auto-merge disable skipped: ${e.message}`);
+    }
+  }
 
   // --- Dispatch ---------------------------------------------------
   const ev = context.eventName;
@@ -245,6 +296,7 @@ module.exports = async ({ github, context, core }) => {
     if (!hasApproved) return setResult('noop');
     await removeLabel(pr.number, approvedLabel);
     await dismissBotApprovals(pr.number, 'New commits pushed — approval invalidated.');
+    await disableAutoMerge(pr.node_id);
     await github.rest.issues.createComment({
       owner, repo, issue_number: pr.number,
       body: `New commits were pushed — removed the \`${approvedLabel}\` label. Re-approve with \`/lgtm\`.`,
@@ -294,6 +346,7 @@ module.exports = async ({ github, context, core }) => {
     if (submitReview) await submitApproval(prNumber, actor, true);
     await react(commentId, '+1');
     await setCommitStatus(pr.head.sha, true, hadHold);
+    await enableAutoMerge(pr.node_id, prNumber);
     return setResult('lgtm-forced', actor);
   }
 
@@ -303,8 +356,13 @@ module.exports = async ({ github, context, core }) => {
     return setResult('self-lgtm-blocked', actor);
   }
 
-  // Auth check (same rule for all commands)
-  if (!(await isAuthorized(actor, pr))) {
+  // Auth check. /lgtm is restricted to always-allow-teams (core maintainers)
+  // only — CODEOWNERS does not grant it. /hold and /stageblog still accept
+  // CODEOWNERS of the PR's changed files.
+  const authorized = cmd === 'lgtm'
+    ? await isInAlwaysAllowTeam(actor)
+    : await isAuthorized(actor, pr);
+  if (!authorized) {
     await react(commentId, '-1');
     return setResult('unauthorized', actor);
   }
@@ -359,11 +417,13 @@ module.exports = async ({ github, context, core }) => {
     if (submitReview) await submitApproval(prNumber, actor);
     await react(commentId, '+1');
     await setCommitStatus(pr.head.sha, true, hadHold);
+    await enableAutoMerge(pr.node_id, prNumber);
     return setResult('lgtm-added', actor);
   }
   if (cmd === 'lgtm' && cancel) {
     await removeLabel(prNumber, approvedLabel);
     await dismissBotApprovals(prNumber, `@${actor} cancelled approval via /lgtm cancel.`);
+    await disableAutoMerge(pr.node_id);
     await react(commentId, '+1');
     await setCommitStatus(pr.head.sha, false, hadHold);
     return setResult('lgtm-removed', actor);

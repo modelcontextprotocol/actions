@@ -8,17 +8,19 @@ CODEOWNERS.
 
 Listens for PR comments and push events, then:
 
-- **`/lgtm`** — if the commenter is a core maintainer _or_ a CODEOWNER of the
-  PR's changed files, adds an `approved` label and submits a bot **APPROVE**
-  review with body "Approved on behalf of @user via `/lgtm`."
-- **`/lgtm cancel`** — removes the `approved` label and dismisses the bot
-  review.
+- **`/lgtm`** — **core maintainers only** (`always-allow-teams`). Adds an
+  `accepted` label, submits a bot **APPROVE** review on behalf of the team,
+  and **enables auto-merge**. The PR merges automatically once all required
+  checks pass. CODEOWNERS does _not_ grant `/lgtm` authorization.
+- **`/lgtm cancel`** — removes the `accepted` label, dismisses the bot review,
+  and disables auto-merge.
 - **`/lgtm force`** — same as `/lgtm`, but **only** members of
   `force-allow-teams` (default: core + lead maintainers) may use it, and it
   **bypasses the self-approval guard**. Intended as an escape hatch for
   maintainers who need to approve their own PRs. The bot review body notes
   the approval came via `/lgtm force`.
-- **`/hold`** — adds a `do-not-merge/hold` label (same authorization rule).
+- **`/hold`** — adds a `do-not-merge/hold` label. Core maintainers _or_
+  CODEOWNERS of the PR's changed files may use this.
 - **`/hold cancel`** or **`/unhold`** — removes the hold label.
 - **`/stageblog`** — if the PR touches any blog paths (default `blog/**`),
   dispatches a caller-defined `workflow_dispatch` workflow passing the PR
@@ -26,27 +28,36 @@ Listens for PR comments and push events, then:
   letting maintainers manually stage blog previews for fork PRs (where the
   normal `pull_request`-triggered preview workflow can't access secrets).
   Disabled unless `stageblog-workflow` is set.
-- **New commits pushed** — removes the `approved` label, dismisses the bot
-  review, and posts a brief comment asking for re-approval.
+- **New commits pushed** — removes the `accepted` label, dismisses the bot
+  review, disables auto-merge, and posts a brief comment asking for
+  re-approval.
 
 Commands are parsed from the **first line** of the comment (case-insensitive,
 must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
 their own PR, receive a 👎 reaction with no further noise. Successful commands
 receive a 👍 reaction.
 
-The action writes a commit status (`slash-commands/approval` by default) after
-each label mutation — this is the merge gate. Mark it as a required status
-check in branch protection. The commit status can **only** be set to `success`
-by an authorized `/lgtm`; manually adding the `approved` label through the
-GitHub UI has no effect on the gate. The caller workflow pairs this with the
-`slash-commands/status` sub-action, which sets the status to `pending` on open
-and on every push (fresh SHA = fresh approval needed).
+### Merge gate
+
+The primary merge gate is **GitHub's native required-reviews rule** plus
+**auto-merge**: configure branch protection to require at least one approving
+review, and enable "Allow auto-merge" in repo Settings. `/lgtm` then satisfies
+the review requirement and turns on auto-merge; the PR merges as soon as CI
+passes. Manually adding the `accepted` label in the GitHub UI has no effect —
+the gate is the review, not the label.
+
+An optional commit status (`slash-commands/approval`) is also written for
+callers who prefer status-check-based gating — set `status-context: ''` to
+disable it. See the [`slash-commands/status` sub-action](#slash-commandsstatus-sub-action)
+if you want to use the status-check flow instead of auto-merge.
 
 ## Prerequisites
 
-- The `approved` and `do-not-merge/hold` labels **must already exist** in the
+- **Allow auto-merge** must be enabled in the caller repo
+  (Settings → General → Pull Requests → Allow auto-merge).
+- The `accepted` and `do-not-merge/hold` labels **must already exist** in the
   caller repo (the action does not auto-create them). Suggested colors:
-  `approved` → `#0e8a16`, `do-not-merge/hold` → `#d93f0b`.
+  `accepted` → `#0e8a16`, `do-not-merge/hold` → `#d93f0b`.
 - A CODEOWNERS file at `.github/CODEOWNERS` (or pass a different path via
   `codeowners-path`). Without one, only `always-allow-teams` members can act.
 
@@ -127,18 +138,14 @@ jobs:
       - uses: modelcontextprotocol/actions/slash-commands@main
         with:
           github-token: ${{ secrets.SLASH_COMMANDS_TOKEN }}
-          always-allow-teams: core-maintainers,lead-maintainers
+          # auto-merge-method: squash  # default; also: merge, rebase
           # stageblog-workflow: stage-blog.yml  # uncomment to enable /stageblog
-
-  # Merge-gate commit status. Mark `slash-commands/approval` as a required
-  # status check in branch protection. This stays pending (yellow) until
-  # /lgtm adds the approved label — no red ❌ on fresh PRs.
-  status:
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: modelcontextprotocol/actions/slash-commands/status@main
 ```
+
+**Branch protection settings** for this flow: enable _Require a pull request
+before merging_ → _Require approvals_ (1), and _Allow auto-merge_ in repo
+Settings. The bot's APPROVE review satisfies the requirement and auto-merge
+handles the rest.
 
 ### Enabling `/stageblog` — companion workflow
 
@@ -191,14 +198,16 @@ jobs:
 |---|---|---|---|
 | `github-token` | ✅ | — | PAT or App token with `read:org` + repo `contents: read` (+ `actions: write` for `/stageblog`). Used for team membership checks, CODEOWNERS fetch, and workflow dispatch. **Default `GITHUB_TOKEN` will not work** for team checks. |
 | `bot-token` | | `${{ github.token }}` | Token for user-visible side effects (comments, reactions, labels, reviews) — defaults to `GITHUB_TOKEN` so these show as `github-actions[bot]`. Rarely needs overriding. |
-| `approved-label` | | `approved` | Label added by `/lgtm` |
+| `approved-label` | | `accepted` | Label added by `/lgtm` to mark the PR as accepted |
 | `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
-| `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` or `/hold` any PR regardless of CODEOWNERS |
+| `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` any PR. **Only these teams can `/lgtm`** — CODEOWNERS does not grant it. Members may also `/hold`/`/stageblog` any PR. |
 | `force-allow-teams` | | `core-maintainers,lead-maintainers` | Comma-separated team slugs whose members may use `/lgtm force` (bypasses self-approval guard). CODEOWNERS does **not** grant this — only team membership. |
-| `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof) |
-| `invalidate-on-push` | | `'true'` | Remove `approved` label + dismiss bot review + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
+| `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof). Grants `/hold` and `/stageblog` only, not `/lgtm`. |
+| `invalidate-on-push` | | `'true'` | Remove `accepted` label + dismiss bot review + disable auto-merge + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
 | `submit-review` | | `'true'` | Submit a bot APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
-| `status-context` | | `slash-commands/approval` | Commit-status context written after each label mutation. Must match the `status` sub-action's `status-context`. Mark this as a required status check in branch protection. |
+| `enable-auto-merge` | | `'true'` | Enable auto-merge after `/lgtm` (disabled on `/lgtm cancel` and push invalidation). Requires repo setting "Allow auto-merge". |
+| `auto-merge-method` | | `squash` | Merge method for auto-merge: `squash`, `merge`, or `rebase` |
+| `status-context` | | `slash-commands/approval` | Optional commit-status context. Set to `''` to disable status writes (recommended when using auto-merge + required reviews as the gate). |
 | `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
 | `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
 
@@ -210,6 +219,11 @@ jobs:
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## `slash-commands/status` sub-action
+
+> **Optional** — only needed if you're using the commit-status merge gate
+> instead of (or alongside) the required-reviews + auto-merge flow. If your
+> branch protection uses required reviews, you can skip this sub-action and
+> set `status-context: ''` on the main action.
 
 Sets the **initial** `pending` commit status when a PR opens, and forces it
 back to `pending` on every push (new SHA = new approval required). Run in a
@@ -275,10 +289,9 @@ Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
   `/lgtm force` escape hatch bypasses this, but is gated strictly to
   `force-allow-teams` membership (CODEOWNERS does not grant it) and the
   review body records that `force` was used.
-- **Manual label bypass** — the commit status (the actual merge gate) is only
-  ever set to `success` by the `/lgtm` handler after the auth check passes.
-  The `status` sub-action sets `pending`/`failure` but never `success`, and the
-  caller workflow does not trigger on `labeled` events. Adding the `approved`
+- **Manual label bypass** — the merge gate is the bot's APPROVE review (or,
+  in the status-check flow, the commit status), both of which are only written
+  by the `/lgtm` handler after the auth check passes. Adding the `accepted`
   label via the GitHub UI is cosmetic.
 - **`/stageblog` SHA pinning** — the dispatch passes `pr.head.sha` captured at
   the moment the maintainer comments. The companion workflow **must** check
