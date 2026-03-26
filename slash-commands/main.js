@@ -13,7 +13,6 @@ module.exports = async ({ github, context, core }) => {
   const codeownersPath = process.env.CODEOWNERS_PATH;
   const invalidateOnPush = process.env.INVALIDATE_ON_PUSH === 'true';
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
-  const statusContext = process.env.STATUS_CONTEXT;
   const autoMerge = process.env.ENABLE_AUTO_MERGE === 'true';
   const autoMergeMethod = process.env.AUTO_MERGE_METHOD.toUpperCase();
   const reviewMarker = '<!-- slash-commands-lgtm -->';
@@ -218,29 +217,6 @@ module.exports = async ({ github, context, core }) => {
       }
     }
   }
-  // GITHUB_TOKEN-triggered label events do NOT create workflow runs, so the
-  // status sub-action cannot react to our addLabel/removeLabel calls. Set the
-  // commit status directly here. This is also the ONLY path that may set
-  // state=success — the status sub-action deliberately never does, so that a
-  // manually-added approved label (triage+ perms suffice) cannot bypass auth.
-  async function setCommitStatus(sha, approved, held) {
-    if (!statusContext) return;
-    let state, description;
-    if (held) {
-      state = 'failure';
-      description = `Blocked by ${holdLabel} — comment /unhold to clear`;
-    } else if (approved) {
-      state = 'success';
-      description = `Approved via /lgtm`;
-    } else {
-      state = 'pending';
-      description = `Awaiting /lgtm from a maintainer or CODEOWNER`;
-    }
-    await github.rest.repos.createCommitStatus({
-      owner, repo, sha, state, description, context: statusContext,
-    });
-    core.info(`Set commit status ${state} on ${sha.slice(0,7)}: ${description}`);
-  }
   async function enableAutoMerge(prNodeId, prNumber) {
     if (!autoMerge) return;
     try {
@@ -327,10 +303,6 @@ module.exports = async ({ github, context, core }) => {
   const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
   if (pr.state !== 'open') return setResult('noop', actor);
 
-  const preLabels = new Set(pr.labels.map(l => l.name));
-  const hadApproved = preLabels.has(approvedLabel);
-  const hadHold = preLabels.has(holdLabel);
-
   // /lgtm force — restricted to force-allow-teams. Bypasses the self-approval
   // guard and the CODEOWNERS path entirely; only team membership grants this.
   if (cmd === 'lgtm' && force) {
@@ -345,7 +317,6 @@ module.exports = async ({ github, context, core }) => {
     await addLabel(prNumber, approvedLabel);
     if (submitReview) await submitApproval(prNumber, actor, true);
     await react(commentId, '+1');
-    await setCommitStatus(pr.head.sha, true, hadHold);
     await enableAutoMerge(pr.node_id, prNumber);
     return setResult('lgtm-forced', actor);
   }
@@ -416,7 +387,6 @@ module.exports = async ({ github, context, core }) => {
     await addLabel(prNumber, approvedLabel);
     if (submitReview) await submitApproval(prNumber, actor);
     await react(commentId, '+1');
-    await setCommitStatus(pr.head.sha, true, hadHold);
     await enableAutoMerge(pr.node_id, prNumber);
     return setResult('lgtm-added', actor);
   }
@@ -425,18 +395,15 @@ module.exports = async ({ github, context, core }) => {
     await dismissBotApprovals(prNumber, `@${actor} cancelled approval via /lgtm cancel.`);
     await disableAutoMerge(pr.node_id);
     await react(commentId, '+1');
-    await setCommitStatus(pr.head.sha, false, hadHold);
     return setResult('lgtm-removed', actor);
   }
   if ((cmd === 'hold' && !cancel)) {
     await addLabel(prNumber, holdLabel);
     await react(commentId, '+1');
-    await setCommitStatus(pr.head.sha, hadApproved, true);
     return setResult('hold-added', actor);
   }
   // /hold cancel or /unhold
   await removeLabel(prNumber, holdLabel);
   await react(commentId, '+1');
-  await setCommitStatus(pr.head.sha, hadApproved, false);
   return setResult('hold-removed', actor);
 };

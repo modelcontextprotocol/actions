@@ -10,4 +10,3 @@ GitHub Actions relevant to the management of MCP repositories.
 | [`cloudflare-pages-preview/cleanup`](cloudflare-pages-preview/README.md) | Delete Cloudflare Pages deployments for a closed PR's branch alias and update the sticky comment |
 | [`hugo-build`](hugo-build/README.md) | Install Go + Hugo extended and build a Hugo site (preview or production mode) |
 | [`slash-commands`](slash-commands/README.md) | Handle `/lgtm` (core-maintainers only: label + approve + auto-merge), `/hold`, and `/stageblog` PR slash commands; invalidate approval on push |
-| [`slash-commands/status`](slash-commands/README.md#slash-commandsstatus-sub-action) | _Optional:_ set a pending/failure commit status for callers using status-check-based gating instead of required-reviews + auto-merge |

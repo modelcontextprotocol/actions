@@ -74,14 +74,6 @@ inputs:
     description: Merge method for auto-merge — one of squash, merge, rebase
     required: false
     default: squash
-  status-context:
-    description: >-
-      Commit-status context name written after each label mutation. Set to
-      empty string to disable status writes (recommended when using
-      enable-auto-merge + required reviews as the merge gate instead). If set,
-      must match the status sub-action's status-context.
-    required: false
-    default: slash-commands/approval
   stageblog-workflow:
     description: >-
       Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
@@ -124,7 +116,6 @@ runs:
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
         ENABLE_AUTO_MERGE: ${{ inputs.enable-auto-merge }}
         AUTO_MERGE_METHOD: ${{ inputs.auto-merge-method }}
-        STATUS_CONTEXT: ${{ inputs.status-context }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
         ORG_TOKEN: ${{ inputs.github-token }}
