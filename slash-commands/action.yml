@@ -9,21 +9,13 @@ description: >-
 inputs:
   github-token:
     description: >-
-      Token used for org team-membership checks only. MUST have read:org
-      scope — the default GITHUB_TOKEN cannot do this. Use a fine-grained PAT
-      with Organization Members:read, or a GitHub App installation token with
-      the same.
+      GitHub App installation token used for all API calls: team-membership
+      checks, labels, comments, reactions, reviews, auto-merge, CODEOWNERS
+      fetch, and workflow dispatch. Must have Organization Members:read plus
+      Repository Pull requests:write and Contents:read (and Actions:write if
+      /stageblog is enabled). The default GITHUB_TOKEN will NOT work — it
+      lacks read:org and its approvals may not count toward required reviews.
     required: true
-  bot-token:
-    description: >-
-      Token used for all repo API calls: comments, reactions, labels, reviews,
-      CODEOWNERS fetch, listFiles, and workflow dispatch. Defaults to the
-      automatic GITHUB_TOKEN so user-visible side effects show as authored by
-      github-actions[bot]. The caller workflow must grant this token the
-      necessary permissions (pull-requests: write, issues: write,
-      contents: read; plus actions: write for /stageblog).
-    required: false
-    default: ${{ github.token }}
   approved-label:
     description: Label added by /lgtm to mark the PR as accepted
     required: false
@@ -118,9 +110,8 @@ runs:
         AUTO_MERGE_METHOD: ${{ inputs.auto-merge-method }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
-        ORG_TOKEN: ${{ inputs.github-token }}
       with:
-        github-token: ${{ inputs.bot-token }}
+        github-token: ${{ inputs.github-token }}
         script: |
           const main = require(process.env.GITHUB_ACTION_PATH + '/main.js');
           await main({ github, context, core });

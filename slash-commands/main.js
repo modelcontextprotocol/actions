@@ -16,14 +16,6 @@ module.exports = async ({ github, context, core }) => {
   const autoMerge = process.env.ENABLE_AUTO_MERGE === 'true';
   const autoMergeMethod = process.env.AUTO_MERGE_METHOD.toUpperCase();
   const reviewMarker = '<!-- slash-commands-lgtm -->';
-  // `github` is authed with bot-token (defaults to GITHUB_TOKEN) so comments,
-  // reactions, labels, and reviews show as github-actions[bot]. The PAT is
-  // passed via env and used ONLY for the raw-fetch team-membership check
-  // below — we cannot construct a second Octokit client here because
-  // @actions/github is bundled into github-script's dist/index.js and not
-  // resolvable, nor does a per-request `headers.authorization` override work
-  // (Octokit's auth hook overwrites it).
-  const orgToken = process.env.ORG_TOKEN;
 
   function setResult(result, actor) {
     core.setOutput('result', result);
@@ -87,32 +79,22 @@ module.exports = async ({ github, context, core }) => {
   async function isTeamMember(user, teamSlug) {
     const key = `${teamSlug}:${user}`;
     if (teamMembershipCache.has(key)) return teamMembershipCache.get(key);
-    const res = await fetch(
-      `https://api.github.com/orgs/${encodeURIComponent(owner)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(user)}`,
-      {
-        headers: {
-          authorization: `Bearer ${orgToken}`,
-          accept: 'application/vnd.github+json',
-          'x-github-api-version': '2022-11-28',
-        },
-      },
-    );
-    if (res.status === 404) {
-      teamMembershipCache.set(key, false);
-      return false;
+    let ok;
+    try {
+      const { data } = await github.rest.teams.getMembershipForUserInOrg({
+        org: owner, team_slug: teamSlug, username: user,
+      });
+      ok = data.state === 'active';
+    } catch (e) {
+      if (e.status === 404) {
+        ok = false;
+      } else if (e.status === 403) {
+        core.warning(`Team membership check for @${owner}/${teamSlug} returned 403 — the provided github-token likely lacks Organization Members:read. Treating as not-a-member.`);
+        ok = false;
+      } else {
+        throw e;
+      }
     }
-    if (res.status === 403) {
-      // Almost always means the token lacks read:org.
-      core.warning(`Team membership check for @${owner}/${teamSlug} returned 403 — the provided github-token likely lacks read:org (Organization Members:read) scope. Treating as not-a-member.`);
-      teamMembershipCache.set(key, false);
-      return false;
-    }
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Team membership check failed: ${res.status} ${body}`);
-    }
-    const data = await res.json();
-    const ok = data.state === 'active';
     teamMembershipCache.set(key, ok);
     return ok;
   }
