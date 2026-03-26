@@ -103,7 +103,7 @@ After creating:
 | | |
 |---|---|
 | **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`) |
-| **Permissions** | `contents: read` is sufficient — the App token handles all writes. If falling back to `GITHUB_TOKEN` for `bot-token`, add `pull-requests: write`, `issues: write`. |
+| **Permissions** | `contents: read` is sufficient — the App token handles all writes. |
 | **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
 | **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
 
@@ -137,7 +137,6 @@ jobs:
       - uses: modelcontextprotocol/actions/slash-commands@main
         with:
           github-token: ${{ steps.app-token.outputs.token }}
-          bot-token: ${{ steps.app-token.outputs.token }}
           # auto-merge-method: squash  # default; also: merge, rebase
           # stageblog-workflow: stage-blog.yml  # uncomment to enable /stageblog
 ```
@@ -196,8 +195,7 @@ jobs:
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `github-token` | ✅ | — | Token with `read:org` (Organization Members: read) for the team-membership check. Pass the App installation token. **Default `GITHUB_TOKEN` will not work** — it lacks `read:org`. |
-| `bot-token` | | `${{ github.token }}` | Token for all repo API calls: comments, reactions, labels, reviews, CODEOWNERS fetch, file listing, workflow dispatch, auto-merge. Pass the App installation token so approvals come from the App identity. |
+| `github-token` | ✅ | — | GitHub App installation token used for everything: team-membership checks, labels, comments, reactions, APPROVE review, auto-merge, CODEOWNERS fetch, workflow dispatch. Must have Organization Members:read + Repository Pull requests:write + Contents:read (+ Actions:write for `/stageblog`). **Default `GITHUB_TOKEN` will not work.** |
 | `approved-label` | | `accepted` | Label added by `/lgtm` to mark the PR as accepted |
 | `hold-label` | | `do-not-merge/hold` | Label added by `/hold` |
 | `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` any PR. **Only these teams can `/lgtm`** — CODEOWNERS does not grant it. Members may also `/hold`/`/stageblog` any PR. |
