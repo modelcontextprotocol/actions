@@ -20,6 +20,7 @@ module.exports = async ({ github, context, core }) => {
   const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10) || 0;
   const projectStatusField = process.env.PROJECT_STATUS_FIELD;
   const projectAcceptedOption = process.env.PROJECT_ACCEPTED_OPTION;
+  const projectGateLabel = process.env.PROJECT_GATE_LABEL;
   const reviewMarker = '<!-- slash-commands-lgtm -->';
 
   function setResult(result, actor) {
@@ -265,11 +266,15 @@ module.exports = async ({ github, context, core }) => {
       core.info(`Auto-merge disable skipped: ${e.message}`);
     }
   }
-  async function onAccept(prNumber, prNodeId) {
+  async function onAccept(pr) {
     for (const label of removeLabelsOnAccept) {
-      await removeLabel(prNumber, label);
+      await removeLabel(pr.number, label);
     }
     if (!projectNumber) return;
+    if (projectGateLabel && !pr.labels.some(l => l.name === projectGateLabel)) {
+      core.info(`Skipping project update — PR lacks '${projectGateLabel}' label`);
+      return;
+    }
     try {
       const lookup = await github.graphql(
         `query($org: String!, $num: Int!, $field: String!) {
@@ -304,7 +309,7 @@ module.exports = async ({ github, context, core }) => {
             item { id }
           }
         }`,
-        { proj: project.id, pr: prNodeId },
+        { proj: project.id, pr: pr.node_id },
       );
       const itemId = add.addProjectV2ItemById.item.id;
       await github.graphql(
@@ -376,7 +381,7 @@ module.exports = async ({ github, context, core }) => {
       return setResult('force-unauthorized', actor);
     }
     await addLabel(prNumber, approvedLabel);
-    await onAccept(prNumber, pr.node_id);
+    await onAccept(pr);
     if (submitReview) await submitApproval(prNumber, actor, true);
     await react(commentId, '+1');
     await enableAutoMerge(pr.node_id, prNumber);
@@ -447,7 +452,7 @@ module.exports = async ({ github, context, core }) => {
   // Execute
   if (cmd === 'lgtm' && !cancel) {
     await addLabel(prNumber, approvedLabel);
-    await onAccept(prNumber, pr.node_id);
+    await onAccept(pr);
     if (submitReview) await submitApproval(prNumber, actor);
     await react(commentId, '+1');
     await enableAutoMerge(pr.node_id, prNumber);
