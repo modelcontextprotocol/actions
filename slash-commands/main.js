@@ -201,29 +201,47 @@ module.exports = async ({ github, context, core }) => {
   }
   async function enableAutoMerge(prNodeId, prNumber) {
     if (!autoMerge) return;
+    async function mergeDirect(reason) {
+      core.info(`${reason} — merging directly`);
+      try {
+        await github.rest.pulls.merge({
+          owner, repo, pull_number: prNumber,
+          merge_method: autoMergeMethod.toLowerCase(),
+        });
+        core.info('Merged');
+      } catch (e) {
+        core.warning(`Direct merge failed: ${e.message}. If branch protection requires code-owner review, add this GitHub App to the ruleset bypass list.`);
+      }
+    }
     try {
-      await github.graphql(
+      const result = await github.graphql(
         `mutation($id: ID!, $m: PullRequestMergeMethod!) {
           enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $m}) {
-            pullRequest { autoMergeRequest { enabledAt } }
+            pullRequest { autoMergeRequest { enabledAt } reviewDecision }
           }
         }`,
         { id: prNodeId, m: autoMergeMethod },
       );
       core.info(`Auto-merge enabled (${autoMergeMethod})`);
+      // Auto-merge does not inherit the ruleset-bypass privileges of the
+      // actor who enabled it — it only fires once the PR is clean for
+      // everyone. If we submitted an approval and reviewDecision is still
+      // REVIEW_REQUIRED, the bot's approval did not satisfy
+      // require_code_owner_review (GitHub Apps cannot be team members), so
+      // auto-merge will never fire. Merge directly instead — a direct merge
+      // DOES use the bot's bypass.
+      const decision = result.enablePullRequestAutoMerge.pullRequest.reviewDecision;
+      if (submitReview && decision === 'REVIEW_REQUIRED') {
+        return mergeDirect('Bot approval did not satisfy review requirement');
+      }
     } catch (e) {
       const msg = e.message || String(e);
       // enablePullRequestAutoMerge rejects PRs that are already mergeable
-      // ("clean status") because there is nothing to wait for. Merge directly.
+      // ("clean status") because there is nothing to wait for.
       if (/clean status/i.test(msg)) {
-        core.info('PR already mergeable — merging directly');
-        await github.rest.pulls.merge({
-          owner, repo, pull_number: prNumber,
-          merge_method: autoMergeMethod.toLowerCase(),
-        });
-      } else {
-        core.warning(`Could not enable auto-merge: ${msg}`);
+        return mergeDirect('PR already mergeable');
       }
+      core.warning(`Could not enable auto-merge: ${msg}`);
     }
   }
   async function disableAutoMerge(prNodeId) {
