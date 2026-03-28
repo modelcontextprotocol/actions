@@ -87,6 +87,12 @@ inputs:
     description: Name of the option to set in the status field on accept
     required: false
     default: Accepted
+  project-gate-label:
+    description: >-
+      If set, only update the project status when the PR has this label.
+      Leave empty to update the project for every accepted PR.
+    required: false
+    default: ''
   stageblog-workflow:
     description: >-
       Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
@@ -133,6 +139,7 @@ runs:
         PROJECT_NUMBER: ${{ inputs.project-number }}
         PROJECT_STATUS_FIELD: ${{ inputs.project-status-field }}
         PROJECT_ACCEPTED_OPTION: ${{ inputs.project-accepted-option }}
+        PROJECT_GATE_LABEL: ${{ inputs.project-gate-label }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
       with:

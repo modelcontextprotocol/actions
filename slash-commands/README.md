@@ -221,6 +221,7 @@ jobs:
 | `project-number` | | _(empty)_ | Org-level Project (V2) number to update on accept. Empty = disabled. Adds the PR to the project if not already present. Requires the App to have **Organization Projects: write**. |
 | `project-status-field` | | `Status` | Name of the single-select field to set on accept. |
 | `project-accepted-option` | | `Accepted` | Name of the option to set in the status field on accept. |
+| `project-gate-label` | | _(empty)_ | If set, only update the project status when the PR has this label (e.g. `SEP`). Empty = update for every accepted PR. Label removal via `remove-labels-on-accept` is not gated — it always runs. |
 | `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
 | `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
 
