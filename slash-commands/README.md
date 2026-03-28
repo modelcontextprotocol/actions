@@ -11,7 +11,9 @@ Listens for PR comments and push events, then:
 - **`/lgtm`** — **core maintainers only** (`always-allow-teams`). Adds an
   `accepted` label, submits an **APPROVE** review on behalf of the commenter,
   and **enables auto-merge**. The PR merges automatically once all required
-  checks pass. CODEOWNERS does _not_ grant `/lgtm` authorization.
+  checks pass. CODEOWNERS does _not_ grant `/lgtm` authorization. Optionally
+  removes staging labels (`remove-labels-on-accept`) and moves the PR to an
+  _Accepted_ status in a configured org Project (`project-number`).
 - **`/lgtm cancel`** — removes the `accepted` label, dismisses the approval,
   and disables auto-merge.
 - **`/lgtm force`** — same as `/lgtm`, but **only** members of
@@ -215,6 +217,10 @@ jobs:
 | `submit-review` | | `'true'` | Submit an APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
 | `enable-auto-merge` | | `'true'` | Enable auto-merge after `/lgtm` (disabled on `/lgtm cancel` and push invalidation). Requires repo setting "Allow auto-merge". |
 | `auto-merge-method` | | `squash` | Merge method for auto-merge: `squash`, `merge`, or `rebase` |
+| `remove-labels-on-accept` | | _(empty)_ | Comma-separated label names to remove when `/lgtm` accepts (e.g. `in-review,draft,proposal`). Missing labels are ignored. |
+| `project-number` | | _(empty)_ | Org-level Project (V2) number to update on accept. Empty = disabled. Adds the PR to the project if not already present. Requires the App to have **Organization Projects: write**. |
+| `project-status-field` | | `Status` | Name of the single-select field to set on accept. |
+| `project-accepted-option` | | `Accepted` | Name of the option to set in the status field on accept. |
 | `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
 | `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
 

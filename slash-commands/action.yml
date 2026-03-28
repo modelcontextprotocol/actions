@@ -66,6 +66,27 @@ inputs:
     description: Merge method for auto-merge — one of squash, merge, rebase
     required: false
     default: squash
+  remove-labels-on-accept:
+    description: >-
+      Comma-separated label names to remove from the PR when /lgtm accepts it
+      (e.g. in-review,draft,proposal). Missing labels are ignored.
+    required: false
+    default: ''
+  project-number:
+    description: >-
+      Org-level Project (V2) number to update when /lgtm accepts the PR. Leave
+      empty to disable project updates. The PR is added to the project if not
+      already present.
+    required: false
+    default: ''
+  project-status-field:
+    description: Name of the single-select field to set on accept
+    required: false
+    default: Status
+  project-accepted-option:
+    description: Name of the option to set in the status field on accept
+    required: false
+    default: Accepted
   stageblog-workflow:
     description: >-
       Workflow file name (e.g. stage-blog.yml) to dispatch when /stageblog is
@@ -108,6 +129,10 @@ runs:
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
         ENABLE_AUTO_MERGE: ${{ inputs.enable-auto-merge }}
         AUTO_MERGE_METHOD: ${{ inputs.auto-merge-method }}
+        REMOVE_LABELS_ON_ACCEPT: ${{ inputs.remove-labels-on-accept }}
+        PROJECT_NUMBER: ${{ inputs.project-number }}
+        PROJECT_STATUS_FIELD: ${{ inputs.project-status-field }}
+        PROJECT_ACCEPTED_OPTION: ${{ inputs.project-accepted-option }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
       with:

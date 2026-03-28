@@ -15,6 +15,11 @@ module.exports = async ({ github, context, core }) => {
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const autoMerge = process.env.ENABLE_AUTO_MERGE === 'true';
   const autoMergeMethod = process.env.AUTO_MERGE_METHOD.toUpperCase();
+  const removeLabelsOnAccept = process.env.REMOVE_LABELS_ON_ACCEPT
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10) || 0;
+  const projectStatusField = process.env.PROJECT_STATUS_FIELD;
+  const projectAcceptedOption = process.env.PROJECT_ACCEPTED_OPTION;
   const reviewMarker = '<!-- slash-commands-lgtm -->';
 
   function setResult(result, actor) {
@@ -260,6 +265,62 @@ module.exports = async ({ github, context, core }) => {
       core.info(`Auto-merge disable skipped: ${e.message}`);
     }
   }
+  async function onAccept(prNumber, prNodeId) {
+    for (const label of removeLabelsOnAccept) {
+      await removeLabel(prNumber, label);
+    }
+    if (!projectNumber) return;
+    try {
+      const lookup = await github.graphql(
+        `query($org: String!, $num: Int!, $field: String!) {
+          organization(login: $org) {
+            projectV2(number: $num) {
+              id
+              field(name: $field) {
+                ... on ProjectV2SingleSelectField { id options { id name } }
+              }
+            }
+          }
+        }`,
+        { org: owner, num: projectNumber, field: projectStatusField },
+      );
+      const project = lookup.organization?.projectV2;
+      if (!project) {
+        return core.warning(`Project #${projectNumber} not found in org ${owner}`);
+      }
+      const field = project.field;
+      if (!field?.id) {
+        return core.warning(`Field '${projectStatusField}' not found (or not single-select) in project #${projectNumber}`);
+      }
+      const option = field.options.find(o => o.name === projectAcceptedOption);
+      if (!option) {
+        return core.warning(`Option '${projectAcceptedOption}' not found in field '${projectStatusField}'`);
+      }
+      // addProjectV2ItemById is idempotent — returns the existing item if
+      // the PR is already in the project.
+      const add = await github.graphql(
+        `mutation($proj: ID!, $pr: ID!) {
+          addProjectV2ItemById(input: {projectId: $proj, contentId: $pr}) {
+            item { id }
+          }
+        }`,
+        { proj: project.id, pr: prNodeId },
+      );
+      const itemId = add.addProjectV2ItemById.item.id;
+      await github.graphql(
+        `mutation($proj: ID!, $item: ID!, $field: ID!, $opt: String!) {
+          updateProjectV2ItemFieldValue(input: {
+            projectId: $proj, itemId: $item, fieldId: $field,
+            value: { singleSelectOptionId: $opt }
+          }) { projectV2Item { id } }
+        }`,
+        { proj: project.id, item: itemId, field: field.id, opt: option.id },
+      );
+      core.info(`Moved PR to '${projectAcceptedOption}' in project #${projectNumber}`);
+    } catch (e) {
+      core.warning(`Project update failed: ${e.message}. Ensure the GitHub App has Organization Projects:write permission.`);
+    }
+  }
 
   // --- Dispatch ---------------------------------------------------
   const ev = context.eventName;
@@ -315,6 +376,7 @@ module.exports = async ({ github, context, core }) => {
       return setResult('force-unauthorized', actor);
     }
     await addLabel(prNumber, approvedLabel);
+    await onAccept(prNumber, pr.node_id);
     if (submitReview) await submitApproval(prNumber, actor, true);
     await react(commentId, '+1');
     await enableAutoMerge(pr.node_id, prNumber);
@@ -385,6 +447,7 @@ module.exports = async ({ github, context, core }) => {
   // Execute
   if (cmd === 'lgtm' && !cancel) {
     await addLabel(prNumber, approvedLabel);
+    await onAccept(prNumber, pr.node_id);
     if (submitReview) await submitApproval(prNumber, actor);
     await react(commentId, '+1');
     await enableAutoMerge(pr.node_id, prNumber);
