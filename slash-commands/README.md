@@ -45,6 +45,16 @@ review; `/lgtm` satisfies that via the App's approval and turns on auto-merge.
 The PR merges as soon as CI passes. Manually adding the `accepted` label in
 the GitHub UI has no effect — the gate is the review, not the label.
 
+> [!IMPORTANT]
+> If your branch protection enables **Require review from Code Owners**, the
+> App's approval will _not_ satisfy it — GitHub Apps cannot be members of org
+> teams, so they cannot be code owners via a team entry. Auto-merge also does
+> not inherit the bypass privileges of the App that enabled it. To make
+> `/lgtm` work under this rule, **add the GitHub App to the ruleset's bypass
+> list** (Settings → Rules → Rulesets → _your ruleset_ → Bypass list → add
+> the App with mode _Always_). The action detects this case and falls back to
+> a direct merge, which _does_ use the App's bypass.
+
 ## Prerequisites
 
 - **A GitHub App** installed on the caller repo with the permissions listed
