@@ -115,6 +115,17 @@ module.exports = async ({ github, context, core }) => {
     return false;
   }
 
+  async function lastLabeledBy(prNumber, labelName) {
+    const events = await github.paginate(github.rest.issues.listEvents, {
+      owner, repo, issue_number: prNumber, per_page: 100,
+    });
+    let actor = null;
+    for (const e of events) {
+      if (e.event === 'labeled' && e.label?.name === labelName) actor = e.actor;
+    }
+    return actor;
+  }
+
   async function isAuthorized(user, pr) {
     // 1. always-allow teams
     if (await isInAlwaysAllowTeam(user)) return true;
@@ -336,6 +347,19 @@ module.exports = async ({ github, context, core }) => {
     const pr = context.payload.pull_request;
     const hasApproved = pr.labels.some(l => l.name === approvedLabel);
     if (!hasApproved) return setResult('noop');
+    // If a core/lead maintainer applied the label directly (not the bot via
+    // /lgtm), treat it as a sticky governance decision rather than a per-SHA
+    // approval. Check the union of always-allow + force-allow teams so lead
+    // maintainers are covered even when always-allow-teams is narrower.
+    const labeler = await lastLabeledBy(pr.number, approvedLabel);
+    if (labeler && labeler.type !== 'Bot') {
+      for (const team of [...alwaysAllowTeams, ...forceAllowTeams]) {
+        if (await isTeamMember(labeler.login, team)) {
+          core.info(`'${approvedLabel}' was applied manually by @${labeler.login} (member of @${owner}/${team}); skipping push invalidation.`);
+          return setResult('invalidate-skipped', labeler.login);
+        }
+      }
+    }
     await removeLabel(pr.number, approvedLabel);
     await dismissBotApprovals(pr.number, 'New commits pushed — approval invalidated.');
     await disableAutoMerge(pr.node_id);

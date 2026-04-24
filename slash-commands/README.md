@@ -32,7 +32,10 @@ Listens for PR comments and push events, then:
   Disabled unless `stageblog-workflow` is set.
 - **New commits pushed** — removes the `accepted` label, dismisses the
   approval, disables auto-merge, and posts a brief comment asking for
-  re-approval.
+  re-approval. **Exception:** if the `accepted` label was most recently
+  applied manually by a member of `always-allow-teams` or `force-allow-teams`
+  (rather than by the bot via `/lgtm`), it is treated as a sticky governance
+  decision and left in place — nothing is removed or dismissed.
 
 Commands are parsed from the **first line** of the comment (case-insensitive,
 must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
@@ -213,7 +216,7 @@ jobs:
 | `always-allow-teams` | | `core-maintainers` | Comma-separated team slugs (in the repo's org) whose members can `/lgtm` any PR. **Only these teams can `/lgtm`** — CODEOWNERS does not grant it. Members may also `/hold`/`/stageblog` any PR. |
 | `force-allow-teams` | | `core-maintainers,lead-maintainers` | Comma-separated team slugs whose members may use `/lgtm force` (bypasses self-approval guard). CODEOWNERS does **not** grant this — only team membership. |
 | `codeowners-path` | | `.github/CODEOWNERS` | Path to CODEOWNERS, fetched from the PR's **base** ref (never head — tamper-proof). Grants `/hold` and `/stageblog` only, not `/lgtm`. |
-| `invalidate-on-push` | | `'true'` | Remove `accepted` label + dismiss approval + disable auto-merge + comment when new commits are pushed. Set `'false'` to keep approval across pushes. |
+| `invalidate-on-push` | | `'true'` | Remove `accepted` label + dismiss approval + disable auto-merge + comment when new commits are pushed. Skipped if the label was most recently applied manually by an `always-allow-teams` or `force-allow-teams` member (not the bot via `/lgtm`). Set `'false'` to keep approval across pushes unconditionally. |
 | `submit-review` | | `'true'` | Submit an APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
 | `enable-auto-merge` | | `'true'` | Enable auto-merge after `/lgtm` (disabled on `/lgtm cancel` and push invalidation). Requires repo setting "Allow auto-merge". |
 | `auto-merge-method` | | `squash` | Merge method for auto-merge: `squash`, `merge`, or `rebase` |
@@ -229,7 +232,7 @@ jobs:
 
 | Output | Description |
 |---|---|
-| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
+| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `invalidate-skipped`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## CODEOWNERS pattern support

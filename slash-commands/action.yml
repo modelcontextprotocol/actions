@@ -45,7 +45,10 @@ inputs:
   invalidate-on-push:
     description: >-
       Remove the approved label and dismiss the bot review when new commits
-      are pushed to the PR. Set to 'false' to keep approval across pushes.
+      are pushed to the PR. Skipped if the label was most recently applied
+      manually by a member of always-allow-teams or force-allow-teams (not
+      the bot via /lgtm). Set to 'false' to keep approval across pushes
+      unconditionally.
     required: false
     default: 'true'
   submit-review:
@@ -112,8 +115,9 @@ outputs:
   result:
     description: >-
       One of: lgtm-added, lgtm-forced, lgtm-removed, hold-added, hold-removed,
-      invalidated, unauthorized, force-unauthorized, self-lgtm-blocked,
-      stageblog-dispatched, stageblog-not-blog, stageblog-disabled, noop
+      invalidated, invalidate-skipped, unauthorized, force-unauthorized,
+      self-lgtm-blocked, stageblog-dispatched, stageblog-not-blog,
+      stageblog-disabled, noop
     value: ${{ steps.handle.outputs.result }}
   actor:
     description: Login of the user who triggered the action (commenter)
