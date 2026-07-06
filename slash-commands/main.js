@@ -21,7 +21,15 @@ module.exports = async ({ github, context, core }) => {
   const projectStatusField = process.env.PROJECT_STATUS_FIELD;
   const projectAcceptedOption = process.env.PROJECT_ACCEPTED_OPTION;
   const projectGateLabel = process.env.PROJECT_GATE_LABEL;
+  const dependabotAutoApprove = process.env.DEPENDABOT_AUTO_APPROVE.trim();
+  const dependabotAllowedFiles = process.env.DEPENDABOT_ALLOWED_FILES
+    .split(',').map(s => s.trim()).filter(Boolean);
   const reviewMarker = '<!-- slash-commands-lgtm -->';
+  // Marker for reviews submitted by the dependabot auto-approve mode. Kept
+  // distinct from the /lgtm marker so logs/audits can tell them apart; push
+  // invalidation dismisses reviews carrying either marker.
+  const dependabotMarker = '<!-- slash-commands-dependabot-auto -->';
+  const botReviewMarkers = [reviewMarker, dependabotMarker];
 
   function setResult(result, actor) {
     core.setOutput('result', result);
@@ -205,7 +213,7 @@ module.exports = async ({ github, context, core }) => {
     });
     for (const r of reviews) {
       if (r.state !== 'APPROVED') continue;
-      if (!r.body || !r.body.includes(reviewMarker)) continue;
+      if (!r.body || !botReviewMarkers.some(mk => r.body.includes(mk))) continue;
       try {
         await github.rest.pulls.dismissReview({
           owner, repo, pull_number: prNumber, review_id: r.id,
@@ -338,6 +346,185 @@ module.exports = async ({ github, context, core }) => {
     }
   }
 
+  // --- Dependabot auto-approve -------------------------------------
+  // Opt-in via `dependabot-auto-approve`. Approves, labels, and enables
+  // auto-merge on Dependabot PRs — but ONLY when every gate below holds.
+  // Any gate failure exits without approving (fail closed), logging why.
+
+  // The real Dependabot app's login and stable numeric user id. Checking the
+  // id means a lookalike account (e.g. a renamed user squatting a similar
+  // login) can never match.
+  const DEPENDABOT_LOGIN = 'dependabot[bot]';
+  const DEPENDABOT_USER_ID = 49699333;
+
+  // Parse Dependabot's structured metadata block from a commit message:
+  //   updated-dependencies:
+  //   - dependency-name: foo
+  //     dependency-type: direct:development
+  //     update-type: version-update:semver-patch
+  // Returns one entry per updated dependency; fields are undefined when the
+  // corresponding line is absent. Empty array = no metadata block found.
+  function parseDependabotMetadata(message) {
+    const entries = [];
+    let inBlock = false;
+    let current = null;
+    for (const raw of message.split('\n')) {
+      const line = raw.replace(/\r$/, '');
+      if (!inBlock) {
+        if (/^updated-dependencies:\s*$/.test(line)) inBlock = true;
+        continue;
+      }
+      const name = line.match(/^-\s+dependency-name:\s*["']?(.+?)["']?\s*$/);
+      if (name) {
+        current = { name: name[1] };
+        entries.push(current);
+        continue;
+      }
+      // Indented `key: value` lines belong to the current entry. Record the
+      // two keys we gate on; tolerate others (e.g. dependency-group).
+      const field = current && line.match(/^\s+([a-z-]+):\s*["']?(.+?)["']?\s*$/);
+      if (field) {
+        if (field[1] === 'dependency-type') current.dependencyType = field[2];
+        if (field[1] === 'update-type') current.updateType = field[2];
+        continue;
+      }
+      // Anything else (the `...` terminator, blank line, trailer) ends the block.
+      inBlock = false;
+      current = null;
+    }
+    return entries;
+  }
+
+  // Evaluate one PR against the auto-approve policy. Returns true only if it
+  // was approved on this call.
+  async function handleDependabotAutoApprove(prNumber) {
+    const skip = (reason) => {
+      core.info(`dependabot-auto-approve: PR #${prNumber} not approved — ${reason}`);
+      return false;
+    };
+
+    const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+
+    // PR must be open, non-draft, without merge conflicts, and not held.
+    if (pr.state !== 'open') return skip('PR is not open');
+    if (pr.draft) return skip('PR is a draft');
+    if (pr.mergeable_state === 'dirty') return skip('PR has merge conflicts');
+    if (pr.labels.some(l => l.name === holdLabel)) return skip(`PR has the '${holdLabel}' label`);
+
+    // 1. Author must be the real Dependabot app — login AND user id.
+    if (pr.user.login !== DEPENDABOT_LOGIN || pr.user.id !== DEPENDABOT_USER_ID) {
+      return skip(`author is @${pr.user.login} (id ${pr.user.id}), not ${DEPENDABOT_LOGIN} (id ${DEPENDABOT_USER_ID})`);
+    }
+
+    // 2. Same-repo head on a dependabot/ branch — never fork PRs.
+    if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
+      return skip('head repo is not the base repo');
+    }
+    if (!pr.head.ref.startsWith('dependabot/')) {
+      return skip(`head ref '${pr.head.ref}' is not a dependabot/ branch`);
+    }
+
+    // 3. Every commit must carry a verified signature and be authored by
+    // dependabot. Once a human pushes to the branch this gate fails for the
+    // rest of the PR's life — by design (fail closed); push invalidation
+    // dismisses the old approval and a maintainer must /lgtm from then on.
+    const commits = await github.paginate(github.rest.pulls.listCommits, {
+      owner, repo, pull_number: prNumber, per_page: 100,
+    });
+    if (!commits.length) return skip('PR has no commits');
+    for (const c of commits) {
+      if (c.commit?.verification?.verified !== true) {
+        return skip(`commit ${c.sha.slice(0, 7)} does not have a verified signature`);
+      }
+      if (c.author?.login !== DEPENDABOT_LOGIN) {
+        return skip(`commit ${c.sha.slice(0, 7)} authored by @${c.author?.login || '(unknown)'}, not ${DEPENDABOT_LOGIN}`);
+      }
+    }
+
+    // 4. Changed files must be a subset of the allow-list (exact paths).
+    // Renames are checked on both sides.
+    const files = await github.paginate(github.rest.pulls.listFiles, {
+      owner, repo, pull_number: prNumber, per_page: 100,
+    });
+    for (const f of files) {
+      if (!dependabotAllowedFiles.includes(f.filename)) {
+        return skip(`changed file '${f.filename}' is not in dependabot-allowed-files`);
+      }
+      if (f.previous_filename && !dependabotAllowedFiles.includes(f.previous_filename)) {
+        return skip(`renamed file '${f.previous_filename}' is not in dependabot-allowed-files`);
+      }
+    }
+
+    // 5. Scope: under 'dev-patch-minor', every updated dependency (from the
+    // structured metadata in the commit messages — trustworthy here because
+    // gate 3 proved the messages are dependabot-authored and signed) must be
+    // direct:development with a semver-patch or semver-minor update. Missing
+    // or unparseable metadata never approves.
+    const deps = [];
+    for (const c of commits) deps.push(...parseDependabotMetadata(c.commit.message));
+    if (!deps.length) return skip('no updated-dependencies metadata found in commit messages');
+    for (const d of deps) {
+      if (d.dependencyType !== 'direct:development') {
+        return skip(`'${d.name}' has dependency-type '${d.dependencyType || '(missing)'}' — mode dev-patch-minor requires direct:development`);
+      }
+      if (!['version-update:semver-patch', 'version-update:semver-minor'].includes(d.updateType)) {
+        return skip(`'${d.name}' has update-type '${d.updateType || '(missing)'}' — mode dev-patch-minor requires semver-patch or semver-minor`);
+      }
+    }
+
+    // 6. CI must be green on the current head SHA: every check run completed
+    // with a passing conclusion, at least one non-skipped check exists (no
+    // approval without CI evidence), and the combined commit status — if any
+    // statuses exist — is success. Pending checks exit silently; the next
+    // check_suite completion re-evaluates. This gate lives here rather than
+    // in branch protection so approval itself is withheld until CI passes.
+    const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+      owner, repo, ref: pr.head.sha, per_page: 100,
+    });
+    const passing = ['success', 'neutral', 'skipped'];
+    for (const run of checkRuns) {
+      if (run.status !== 'completed') {
+        return skip(`check '${run.name}' is still ${run.status}`);
+      }
+      if (!passing.includes(run.conclusion)) {
+        return skip(`check '${run.name}' concluded '${run.conclusion}'`);
+      }
+    }
+    if (!checkRuns.some(r => r.conclusion !== 'skipped')) {
+      return skip('no non-skipped check runs on the head SHA');
+    }
+    const { data: combined } = await github.rest.repos.getCombinedStatusForRef({
+      owner, repo, ref: pr.head.sha,
+    });
+    if (combined.total_count > 0 && combined.state !== 'success') {
+      return skip(`combined commit status is '${combined.state}'`);
+    }
+
+    // Idempotency: concurrent check_suite completions can race — skip if an
+    // active (non-dismissed) auto-approval already exists.
+    const reviews = await github.paginate(github.rest.pulls.listReviews, {
+      owner, repo, pull_number: prNumber, per_page: 100,
+    });
+    if (reviews.some(r => r.state === 'APPROVED' && r.body?.includes(dependabotMarker))) {
+      return skip('already auto-approved');
+    }
+
+    // All gates passed — mirror the /lgtm accept path with the distinct
+    // marker, so push invalidation dismisses this approval too.
+    await addLabel(prNumber, approvedLabel);
+    await onAccept(pr);
+    await github.rest.pulls.createReview({
+      owner, repo, pull_number: prNumber, event: 'APPROVE',
+      body: `${dependabotMarker}\nAutomatically approved under the \`${dependabotAutoApprove}\` Dependabot policy: `
+        + 'all commits are dependabot-authored with verified signatures, changed files are within '
+        + `\`${dependabotAllowedFiles.join(', ')}\`, every update is \`direct:development\` `
+        + 'semver-patch/minor, and CI is green.',
+    });
+    await enableAutoMerge(pr.node_id, prNumber);
+    core.info(`dependabot-auto-approve: PR #${prNumber} approved`);
+    return true;
+  }
+
   // --- Dispatch ---------------------------------------------------
   const ev = context.eventName;
 
@@ -368,6 +555,43 @@ module.exports = async ({ github, context, core }) => {
       body: `New commits were pushed — removed the \`${approvedLabel}\` label. Re-approve with \`/lgtm\`.`,
     });
     return setResult('invalidated');
+  }
+
+  // Dependabot auto-approve — evaluated when a PR opens/reopens and whenever
+  // a check suite completes on a dependabot branch (the pass that usually
+  // approves, since CI is rarely finished at open time).
+  const isDependabotEvent =
+    (ev === 'pull_request_target' && ['opened', 'reopened'].includes(context.payload.action)) ||
+    (ev === 'check_suite' && context.payload.action === 'completed');
+  if (isDependabotEvent) {
+    if (!dependabotAutoApprove) return setResult('noop');
+    if (dependabotAutoApprove !== 'dev-patch-minor') {
+      core.warning(`Unknown dependabot-auto-approve mode '${dependabotAutoApprove}' — auto-approve disabled (fail closed).`);
+      return setResult('noop');
+    }
+    const prNumbers = [];
+    if (ev === 'check_suite') {
+      const suite = context.payload.check_suite;
+      const branch = suite.head_branch || '';
+      // Only same-repo dependabot/ branches can ever pass the gates — skip
+      // the API round-trips entirely for everything else.
+      if (!branch.startsWith('dependabot/')) return setResult('noop');
+      for (const p of suite.pull_requests || []) prNumbers.push(p.number);
+      if (!prNumbers.length) {
+        // pull_requests can be empty on some deliveries — resolve by branch.
+        const { data: prs } = await github.rest.pulls.list({
+          owner, repo, state: 'open', head: `${owner}:${branch}`, per_page: 10,
+        });
+        for (const p of prs) prNumbers.push(p.number);
+      }
+    } else {
+      prNumbers.push(context.payload.pull_request.number);
+    }
+    let approvedCount = 0;
+    for (const n of prNumbers) {
+      if (await handleDependabotAutoApprove(n)) approvedCount++;
+    }
+    return setResult(approvedCount ? 'dependabot-approved' : 'dependabot-skipped');
   }
 
   // Comment commands

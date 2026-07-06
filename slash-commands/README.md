@@ -2,7 +2,8 @@
 
 Reusable composite action that implements Prow-style `/lgtm`, `/hold`, and
 `/stageblog` slash commands on pull requests, gated by team membership and
-CODEOWNERS.
+CODEOWNERS. Optionally auto-approves narrowly-scoped Dependabot PRs
+(`dependabot-auto-approve`).
 
 ## What it does
 
@@ -41,6 +42,54 @@ Commands are parsed from the **first line** of the comment (case-insensitive,
 must match `^/cmd\b`). Unauthorized attempts, or a PR author trying to `/lgtm`
 their own PR, receive a 👎 reaction with no further noise. Successful commands
 receive a 👍 reaction.
+
+### Dependabot auto-approve (opt-in)
+
+When `dependabot-auto-approve: dev-patch-minor` is set, the action evaluates
+Dependabot PRs on `pull_request_target` (`opened`/`reopened`) and on every
+`check_suite` completion for a `dependabot/` branch, and — when the PR passes
+**all** of the gates below — adds the `accepted` label, submits a bot APPROVE
+review (marker `<!-- slash-commands-dependabot-auto -->`), and enables
+auto-merge, exactly like `/lgtm`. Any gate failure exits **without approving**
+(fail closed) and logs the reason to the action log only:
+
+1. **Real Dependabot** — PR author login is `dependabot[bot]` **and** the
+   user id is `49699333` (the Dependabot app's stable id). A lookalike
+   account can never match.
+2. **Same-repo head** — the head branch lives in the base repo (never a
+   fork) and starts with `dependabot/`.
+3. **Trusted commits** — every commit on the PR has a **verified signature**
+   and is authored by `dependabot[bot]`.
+4. **File allow-list** — the changed files are a subset of
+   `dependabot-allowed-files` (exact paths; default
+   `package.json,package-lock.json`).
+5. **Dependency scope** — Dependabot's structured commit-message metadata
+   (`updated-dependencies:` block) must show **every** updated dependency as
+   `dependency-type: direct:development` with
+   `update-type: version-update:semver-patch` or `…semver-minor`. Missing or
+   unparseable metadata never approves. (The metadata is trustworthy at this
+   point because gate 3 proved the commits are dependabot-authored and
+   signed.)
+6. **CI green** — every check run on the head SHA is completed with
+   conclusion `success`/`neutral`/`skipped`, at least one **non-skipped**
+   check exists, and the combined commit status (if any statuses exist) is
+   `success`. Pending checks exit silently — the next `check_suite`
+   completion re-evaluates. This gate lives **in the action** so approval
+   itself is withheld until CI passes, even when branch protection has no
+   required status checks.
+7. **PR state** — open, not a draft, no merge conflicts, and not carrying
+   the hold label.
+
+Push invalidation applies to these approvals too: any push to the PR (human
+or Dependabot rebase) dismisses the auto-approval, removes the label, and
+disables auto-merge. If **Dependabot** pushed (e.g. a rebase), the PR is
+re-evaluated when its checks complete and can be re-approved. If a **human**
+pushed, gate 3 fails permanently for that PR — every subsequent evaluation
+sees a non-dependabot commit — so the PR can only proceed via a maintainer's
+`/lgtm`. That one-way trapdoor is intentional.
+
+Enabling the mode requires two extra caller-workflow triggers — see
+[Caller workflow requirements](#caller-workflow-requirements).
 
 ### Merge gate
 
@@ -117,7 +166,7 @@ After creating:
 
 | | |
 |---|---|
-| **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`) |
+| **Triggers** | `issue_comment` (types: `created`) + `pull_request_target` (types: `synchronize`). With `dependabot-auto-approve` enabled, also `pull_request_target` types `opened`, `reopened` + `check_suite` (types: `completed`) — gate the `check_suite` job on `startsWith(github.event.check_suite.head_branch, 'dependabot/')` to avoid a run per suite repo-wide. |
 | **Permissions** | `contents: read` is sufficient — the App token handles all writes. |
 | **Fork-PR safety** | No special guard needed — `issue_comment` and `pull_request_target` both run in the **base** repo's context with the base workflow definition, so fork authors cannot modify the logic. CODEOWNERS is also fetched from the PR's **base** ref, never the head. |
 | **No checkout** | The action calls GitHub API only. Do not `actions/checkout` PR code. |
@@ -154,6 +203,9 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           # auto-merge-method: squash  # default; also: merge, rebase
           # stageblog-workflow: stage-blog.yml  # uncomment to enable /stageblog
+          # dependabot-auto-approve: dev-patch-minor  # uncomment to enable — also add
+          #   pull_request_target types [opened, reopened] and check_suite [completed]
+          #   triggers above (see Caller workflow requirements)
 ```
 
 **Branch protection settings** for this flow: enable _Require a pull request
@@ -227,12 +279,14 @@ jobs:
 | `project-gate-label` | | _(empty)_ | If set, only update the project status when the PR has this label (e.g. `SEP`). Empty = update for every accepted PR. Label removal via `remove-labels-on-accept` is not gated — it always runs. |
 | `stageblog-workflow` | | _(empty)_ | Workflow file name (e.g. `stage-blog.yml`) to dispatch when `/stageblog` is invoked. Empty = command disabled. The workflow must accept `pr_number` and `head_sha` string inputs. |
 | `stageblog-paths` | | `blog/**` | Comma-separated CODEOWNERS-style glob patterns. `/stageblog` is refused if no changed file matches. |
+| `dependabot-auto-approve` | | _(empty)_ | Dependabot auto-approve policy. Empty = disabled. `dev-patch-minor` = approve + label + auto-merge Dependabot PRs that pass **all** gates (see [Dependabot auto-approve](#dependabot-auto-approve-opt-in)). Any other value disables the mode (fail closed). Requires the extra caller triggers listed above. |
+| `dependabot-allowed-files` | | `package.json,package-lock.json` | Comma-separated **exact** file paths a Dependabot PR may touch to qualify for auto-approve. Any other changed file blocks auto-approval. |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `invalidate-skipped`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `noop` |
+| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `invalidate-skipped`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `dependabot-approved`, `dependabot-skipped`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## CODEOWNERS pattern support
@@ -274,3 +328,11 @@ Last-match-wins per file, consistent with GitHub's native CODEOWNERS semantics.
   author cannot push new commits between the maintainer's review and the build.
 - **Review provenance** — the review body always names the real approver
   ("on behalf of @login"), even though GitHub shows the review as App-authored.
+- **Dependabot auto-approve** — off by default; every gate fails closed. The
+  author check pins the Dependabot app's numeric user id, not just the login;
+  fork heads are rejected outright; commit trust requires verified signatures
+  on dependabot-authored commits; the file allow-list is exact-path; missing
+  update metadata never approves; and approval waits for green CI inside the
+  action, so it holds even without required status checks in branch
+  protection. A human push onto a dependabot branch permanently disqualifies
+  the PR from auto-approval (gate 3) — only `/lgtm` can accept it after that.
