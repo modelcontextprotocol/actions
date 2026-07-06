@@ -4,7 +4,8 @@ description: >-
   can approve via /lgtm (adds an accepted label, submits a bot APPROVE review,
   and enables auto-merge). Core maintainers or CODEOWNERS can block via /hold
   or trigger a blog preview staging workflow via /stageblog. Approval is
-  invalidated when new commits are pushed.
+  invalidated when new commits are pushed. Optionally auto-approves
+  narrowly-scoped Dependabot PRs (dependabot-auto-approve).
 
 inputs:
   github-token:
@@ -110,6 +111,29 @@ inputs:
       if no file matches.
     required: false
     default: 'blog/**'
+  dependabot-auto-approve:
+    description: >-
+      Opt-in Dependabot auto-approve policy. Empty (default) = disabled.
+      'dev-patch-minor' approves + labels + enables auto-merge on Dependabot
+      PRs where ALL of these hold: author is the real dependabot[bot] app
+      (login and user id), same-repo dependabot/ head branch, every commit is
+      signature-verified and dependabot-authored, changed files are a subset
+      of dependabot-allowed-files, every updated dependency is
+      direct:development with a semver-patch/minor update (per Dependabot's
+      commit-message metadata; missing metadata never approves), all check
+      runs on the head SHA are green with at least one non-skipped check, and
+      the PR is open, non-draft, conflict-free, and not on hold. Requires the
+      caller workflow to also trigger on pull_request_target
+      [opened, reopened] and check_suite [completed]. Any other value
+      disables the mode (fail closed).
+    required: false
+    default: ''
+  dependabot-allowed-files:
+    description: >-
+      Comma-separated exact file paths a Dependabot PR may touch to qualify
+      for auto-approve. A PR changing any other file is never auto-approved.
+    required: false
+    default: 'package.json,package-lock.json'
 
 outputs:
   result:
@@ -117,7 +141,7 @@ outputs:
       One of: lgtm-added, lgtm-forced, lgtm-removed, hold-added, hold-removed,
       invalidated, invalidate-skipped, unauthorized, force-unauthorized,
       self-lgtm-blocked, stageblog-dispatched, stageblog-not-blog,
-      stageblog-disabled, noop
+      stageblog-disabled, dependabot-approved, dependabot-skipped, noop
     value: ${{ steps.handle.outputs.result }}
   actor:
     description: Login of the user who triggered the action (commenter)
@@ -146,6 +170,8 @@ runs:
         PROJECT_GATE_LABEL: ${{ inputs.project-gate-label }}
         STAGEBLOG_WORKFLOW: ${{ inputs.stageblog-workflow }}
         STAGEBLOG_PATHS: ${{ inputs.stageblog-paths }}
+        DEPENDABOT_AUTO_APPROVE: ${{ inputs.dependabot-auto-approve }}
+        DEPENDABOT_ALLOWED_FILES: ${{ inputs.dependabot-allowed-files }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
