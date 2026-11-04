@@ -1,0 +1,25 @@
+name: Test slash commands
+
+on:
+  pull_request:
+    paths:
+      - 'slash-commands/**'
+      - '.github/workflows/test-slash-commands.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'slash-commands/**'
+      - '.github/workflows/test-slash-commands.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node --test slash-commands/checked-merge.test.cjs

@@ -70,6 +70,15 @@ inputs:
     description: Merge method for auto-merge — one of squash, merge, rebase
     required: false
     default: squash
+  required-title-check:
+    description: >-
+      Opt in to checked squash merges by naming the GitHub Actions title check
+      (e.g. PR title). Require a successful check on the current head and a
+      conventional title, use the PR title/description as the squash message,
+      and disable the ruleset-bypass fallback. Empty preserves existing behavior.
+      Requires auto-merge-method: squash and Checks:read on the App token.
+    required: false
+    default: ''
   remove-labels-on-accept:
     description: >-
       Comma-separated label names to remove from the PR when /lgtm accepts it
@@ -141,7 +150,7 @@ outputs:
       One of: lgtm-added, lgtm-forced, lgtm-removed, hold-added, hold-removed,
       invalidated, invalidate-skipped, unauthorized, force-unauthorized,
       self-lgtm-blocked, stageblog-dispatched, stageblog-not-blog,
-      stageblog-disabled, dependabot-approved, dependabot-skipped, noop
+      stageblog-disabled, dependabot-approved, dependabot-skipped, merge-refreshed, noop
     value: ${{ steps.handle.outputs.result }}
   actor:
     description: Login of the user who triggered the action (commenter)
@@ -163,6 +172,7 @@ runs:
         SUBMIT_REVIEW: ${{ inputs.submit-review }}
         ENABLE_AUTO_MERGE: ${{ inputs.enable-auto-merge }}
         AUTO_MERGE_METHOD: ${{ inputs.auto-merge-method }}
+        REQUIRED_TITLE_CHECK: ${{ inputs.required-title-check }}
         REMOVE_LABELS_ON_ACCEPT: ${{ inputs.remove-labels-on-accept }}
         PROJECT_NUMBER: ${{ inputs.project-number }}
         PROJECT_STATUS_FIELD: ${{ inputs.project-status-field }}

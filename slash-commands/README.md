@@ -109,6 +109,33 @@ the GitHub UI has no effect — the gate is the review, not the label.
 > the App with mode _Always_). The action detects this case and falls back to
 > a direct merge, which _does_ use the App's bypass.
 
+### Checked squash merges (opt-in)
+
+Set `required-title-check: PR title` with `auto-merge-method: squash` to require
+that GitHub Actions check to succeed on the current PR head. The action also
+validates the current conventional title, including `sep(SEP-N)` scopes. It uses
+the PR title and description for the squash commit and retains commit co-authors.
+Keep required disclosures in the PR description.
+
+Add `edited` to the caller's `pull_request_target` types and a `workflow_run`
+trigger for completion of the title workflow (for example, `PR title policy`).
+Include both events in the caller's job condition. Title/body edits refresh the
+queued message; completion retries after a pending title check. Refreshes require
+an existing bot approval on the current head and the approved label. No PR code
+or workflow artifacts are executed.
+
+The App needs **Checks:read**, in addition to its existing permissions. Both
+native auto-merge and direct merge use the checked head SHA. Direct merge is
+only attempted if GitHub rejects auto-merge because the PR is already clean;
+the review-bypass fallback is disabled. Missing checks, invalid titles, drafts,
+holds, or API failures leave the PR unmerged. Existing callers are unchanged
+when this input is empty.
+
+Require the title check in repository rules before treating this as enforcement.
+Event handlers are asynchronous: a title edit is not atomic with a merge, and
+maintainers can still change the final squash message. Verify title edits and
+required-review behavior in a test repository before enabling this in production.
+
 ## Prerequisites
 
 - **A GitHub App** installed on the caller repo with the permissions listed
@@ -272,6 +299,7 @@ jobs:
 | `submit-review` | | `'true'` | Submit an APPROVE review alongside the label on `/lgtm`. Set `'false'` to use label only. |
 | `enable-auto-merge` | | `'true'` | Enable auto-merge after `/lgtm` (disabled on `/lgtm cancel` and push invalidation). Requires repo setting "Allow auto-merge". |
 | `auto-merge-method` | | `squash` | Merge method for auto-merge: `squash`, `merge`, or `rebase` |
+| `required-title-check` | | _(empty)_ | Enable checked squash merges using this GitHub Actions check name. Requires `squash`, Checks:read, and the additional triggers described above. |
 | `remove-labels-on-accept` | | _(empty)_ | Comma-separated label names to remove when `/lgtm` accepts (e.g. `in-review,draft,proposal`). Missing labels are ignored. |
 | `project-number` | | _(empty)_ | Org-level Project (V2) number to update on accept. Empty = disabled. Adds the PR to the project if not already present. Requires the App to have **Organization Projects: write**. |
 | `project-status-field` | | `Status` | Name of the single-select field to set on accept. |
@@ -286,7 +314,7 @@ jobs:
 
 | Output | Description |
 |---|---|
-| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `invalidate-skipped`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `dependabot-approved`, `dependabot-skipped`, `noop` |
+| `result` | One of: `lgtm-added`, `lgtm-forced`, `lgtm-removed`, `hold-added`, `hold-removed`, `invalidated`, `invalidate-skipped`, `unauthorized`, `force-unauthorized`, `self-lgtm-blocked`, `stageblog-dispatched`, `stageblog-not-blog`, `stageblog-disabled`, `dependabot-approved`, `dependabot-skipped`, `merge-refreshed`, `noop` |
 | `actor` | Login of the commenter (empty for non-comment triggers) |
 
 ## CODEOWNERS pattern support

@@ -15,6 +15,7 @@ module.exports = async ({ github, context, core }) => {
   const submitReview = process.env.SUBMIT_REVIEW === 'true';
   const autoMerge = process.env.ENABLE_AUTO_MERGE === 'true';
   const autoMergeMethod = process.env.AUTO_MERGE_METHOD.toUpperCase();
+  const requiredTitleCheck = (process.env.REQUIRED_TITLE_CHECK || '').trim();
   const removeLabelsOnAccept = process.env.REMOVE_LABELS_ON_ACCEPT
     .split(',').map(s => s.trim()).filter(Boolean);
   const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10) || 0;
@@ -226,6 +227,12 @@ module.exports = async ({ github, context, core }) => {
   }
   async function enableAutoMerge(prNodeId, prNumber) {
     if (!autoMerge) return;
+    if (requiredTitleCheck) {
+      if (autoMergeMethod !== 'SQUASH') throw new Error('required-title-check requires auto-merge-method: squash');
+      return require('./checked-merge')({
+        github, core, owner, repo, prNumber, checkName: requiredTitleCheck, holdLabel,
+      });
+    }
     async function mergeDirect(reason) {
       core.info(`${reason} — merging directly`);
       try {
@@ -527,6 +534,39 @@ module.exports = async ({ github, context, core }) => {
 
   // --- Dispatch ---------------------------------------------------
   const ev = context.eventName;
+
+  // Title/body edits replace any queued squash message. A title-workflow
+  // completion retries after its check finishes. Only existing bot approvals
+  // authorize this refresh; a manually applied label is not sufficient.
+  if (requiredTitleCheck && (
+    (ev === 'pull_request_target' && context.payload.action === 'edited'
+      && (context.payload.changes?.title || context.payload.changes?.body)) ||
+    (ev === 'workflow_run' && context.payload.action === 'completed')
+  )) {
+    let prs = context.payload.pull_request ? [context.payload.pull_request] : context.payload.workflow_run.pull_requests || [];
+    if (!prs.length && ev === 'workflow_run') {
+      const run = context.payload.workflow_run;
+      const headOwner = run.head_repository?.owner?.login;
+      if (!headOwner || !run.head_branch) return setResult('noop');
+      prs = (await github.rest.pulls.list({
+        owner, repo, state: 'open', head: `${headOwner}:${run.head_branch}`, per_page: 100,
+      })).data;
+    }
+    for (const candidate of prs) {
+      const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: candidate.number });
+      if (pr.state !== 'open') continue;
+      if (ev === 'workflow_run' && pr.head.sha !== context.payload.workflow_run.head_sha) continue;
+      const reviews = await github.paginate(github.rest.pulls.listReviews, {
+        owner, repo, pull_number: pr.number, per_page: 100,
+      });
+      const approved = reviews.some(review => review.state === 'APPROVED' && review.commit_id === pr.head.sha && review.user?.type === 'Bot'
+        && botReviewMarkers.some(marker => review.body?.includes(marker)));
+      if (approved && pr.labels.some(label => label.name === approvedLabel)) {
+        await enableAutoMerge(pr.node_id, pr.number);
+      }
+    }
+    return setResult('merge-refreshed');
+  }
 
   // Invalidation on push
   if (ev === 'pull_request_target' && context.payload.action === 'synchronize') {
